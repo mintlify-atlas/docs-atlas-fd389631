@@ -417,8 +417,15 @@ The public `takes_values()` method returns whether a given action consumes a val
 ```rust
 pub fn takes_values(&self) -> bool {
     match self {
-        Self::Set | Self::Append => true,
-        _ => false,
+        Self::Set => true,
+        Self::Append => true,
+        Self::SetTrue => false,
+        Self::SetFalse => false,
+        Self::Count => false,
+        Self::Help => false,
+        Self::HelpShort => false,
+        Self::HelpLong => false,
+        Self::Version => false,
     }
 }
 ```

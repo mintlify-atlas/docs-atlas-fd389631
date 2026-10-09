@@ -1,5 +1,5 @@
 ---
-title: "Derive API Reference: Attributes and Field Types"
+title: "Derive Macro Reference: Attributes and Field Types"
 sidebarTitle: "Derive Reference"
 description: "Complete reference for clap's derive macros — Parser, Args, Subcommand, and ValueEnum — including all command, arg, and value attributes."
 ---
@@ -120,7 +120,7 @@ Command attributes apply to the struct or enum deriving `Parser`, `Args`, or `Su
 | `version [= <expr>]` | `Command::version` | Without `<expr>`: uses crate `version` from `Cargo.toml` |
 | `author [= <expr>]` | `Command::author` | Without `<expr>`: uses crate `authors` field. Requires a custom `help_template` to display. |
 | `about [= <expr>]` | `Command::about` | Without `<expr>`: uses crate `description`. Falls back to doc comment summary. |
-| `long_about [= <expr>]` | `Command::long_about` | Without value: uses full doc comment when a blank line is present |
+| `long_about[ = <expr>]` | `Command::long_about` | Without value: uses full doc comment when a blank line is present |
 | `verbatim_doc_comment` | — | Minimizes pre-processing of doc comments |
 | `next_display_order` | `Command::next_display_order` | Controls display order of subsequent args |
 | `next_help_heading` | `Command::next_help_heading` | Sets the help heading for following args; scoped when used with `flatten` |
@@ -194,7 +194,7 @@ Arg attributes apply to individual fields, placed in `#[arg(...)]`. Without attr
 | `value_parser [= <expr>]` | `Arg::value_parser` | Auto-selected via `value_parser!(T)` if not set |
 | `action [= <expr>]` | `Arg::action` | Auto-selected from field type if not set |
 | `help = <expr>` | `Arg::help` | Falls back to doc comment summary |
-| `long_help [= <expr>]` | `Arg::long_help` | Falls back to full doc comment when blank line present |
+| `long_help[ = <expr>]` | `Arg::long_help` | Falls back to full doc comment when blank line present |
 | `verbatim_doc_comment` | — | Suppress doc comment pre-processing |
 | `short [= <char>]` | `Arg::short` | Without `<char>`: first character of the case-converted field name |
 | `long [= <str>]` | `Arg::long` | Without `<str>`: the case-converted field name |
@@ -268,6 +268,7 @@ clap infers argument behavior from the Rust type of each field.
 
 | Type | Effect | Implied Behavior | Notes |
 |---|---|---|---|
+| `()` | User-defined | `.action(ArgAction::Set).required(false)` | |
 | `bool` | Flag | `.action(ArgAction::SetTrue)` | |
 | `Option<T>` | Optional argument | `.action(ArgAction::Set).required(false)` | |
 | `Option<Option<T>>` | Optional value for optional argument | `.action(ArgAction::Set).required(false).num_args(0..=1)` | |
@@ -276,7 +277,6 @@ clap infers argument behavior from the Rust type of each field.
 | `Option<Vec<T>>` | Zero or more occurrences | `.action(ArgAction::Append).required(false)` | `None` when no args given |
 | `Vec<Vec<T>>` | Occurrences grouped by instance | `.action(ArgAction::Append).required(false)` | Requires `unstable-v5` |
 | `Option<Vec<Vec<T>>>` | Occurrences grouped by instance | `.action(ArgAction::Append).required(false)` | Requires `unstable-v5` |
-| `()` | User-defined | `.action(ArgAction::Set).required(false)` | |
 
 <Tip>
   `value_parser!(T)` is called automatically for each field unless overridden
@@ -383,8 +383,31 @@ The builder and derive APIs can be combined when you need runtime flexibility al
 Use `Args::augment_args` to add derive-based arguments to a manually constructed `Command`:
 
 ```rust
-// From examples/derive_ref/augment_args.rs
-// (use Args::augment_args to add derived args to a builder Command)
+use clap::{Args, Command, FromArgMatches as _, arg};
+
+#[derive(Args, Debug)]
+struct DerivedArgs {
+    #[arg(short, long)]
+    derived: bool,
+}
+
+fn main() {
+    let cli = Command::new("CLI").arg(arg!(-b --built).action(clap::ArgAction::SetTrue));
+    // Augment built args with derived args
+    let cli = DerivedArgs::augment_args(cli);
+
+    let matches = cli.get_matches();
+    println!("Value of built: {:?}", matches.get_flag("built"));
+    println!(
+        "Value of derived via ArgMatches: {:?}",
+        matches.get_flag("derived")
+    );
+
+    let derived_matches = DerivedArgs::from_arg_matches(&matches)
+        .map_err(|err| err.exit())
+        .unwrap();
+    println!("Value of derived: {derived_matches:#?}");
+}
 ```
 
 ### Augmenting a Builder Command with Derive Subcommands
@@ -392,8 +415,27 @@ Use `Args::augment_args` to add derive-based arguments to a manually constructed
 Use `Subcommand::augment_subcommands` to add derived subcommands to a builder `Command`:
 
 ```rust
-// From examples/derive_ref/augment_subcommands.rs
-// (use Subcommand::augment_subcommands to add derived subcommands)
+use clap::{Command, FromArgMatches as _, Parser, Subcommand as _};
+
+#[derive(Parser, Debug)]
+enum Subcommands {
+    Derived {
+        #[arg(short, long)]
+        derived_flag: bool,
+    },
+}
+
+fn main() {
+    let cli = Command::new("Built CLI");
+    // Augment with derived subcommands
+    let cli = Subcommands::augment_subcommands(cli);
+
+    let matches = cli.get_matches();
+    let derived_subcommands = Subcommands::from_arg_matches(&matches)
+        .map_err(|err| err.exit())
+        .unwrap();
+    println!("Derived subcommands: {derived_subcommands:#?}");
+}
 ```
 
 ### Hand-Implemented Subcommands in a Derived Application

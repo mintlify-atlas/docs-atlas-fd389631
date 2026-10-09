@@ -1,7 +1,7 @@
 ---
 title: "Value Parsers: Parsing and Validating Argument Values"
 sidebarTitle: "Value Parsers"
-description: "Complete reference for clap's value parsing system — built-in parsers, ranged numeric types, enums, custom TypedValueParser implementations, and the value_parser! macro."
+description: "Reference for clap's value parsing system — built-in parsers, ranged numeric types, custom TypedValueParser implementations, and the value_parser! macro."
 ---
 
 Value parsers are the layer between raw command-line strings and the typed Rust values your application works with. Every argument has a value parser — either selected automatically by `value_parser!(T)` or set explicitly with `Arg::value_parser`. This page covers every parser clap ships, plus how to build your own.

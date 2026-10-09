@@ -281,7 +281,7 @@ Arg::new("hostname")
 Parses signed 64-bit integers and validates they fall within an optional range. The output type `T` can be any integer type that fits within `i64`.
 
 ```rust
-pub struct RangedI64ValueParser<T: TryFrom<i64> = i64> { /* ... */ }
+pub struct RangedI64ValueParser<T: TryFrom<i64> + Clone + Send + Sync = i64> { /* ... */ }
 impl<T: TryFrom<i64> + Clone + Send + Sync> RangedI64ValueParser<T> {
     pub fn new() -> Self
     pub fn range<B: RangeBounds<i64>>(self, range: B) -> Self
@@ -312,7 +312,7 @@ Parses unsigned 64-bit integers with optional range validation.
 
 ```rust
 pub struct RangedU64ValueParser<T: TryFrom<u64> = u64> { /* ... */ }
-impl<T: TryFrom<u64> + Clone + Send + Sync> RangedU64ValueParser<T> {
+impl<T: TryFrom<u64>> RangedU64ValueParser<T> {
     pub fn new() -> Self
     pub fn range<B: RangeBounds<u64>>(self, range: B) -> Self
 }

@@ -1,7 +1,7 @@
 ---
-title: "Output Styling: Colors and Terminal Formatting"
+title: "clap Output Styling: Terminal Colors, ANSI Effects"
 sidebarTitle: "Styling"
-description: "Reference for clap's Styles API — customize help and error output colors, apply ANSI effects, control ColorChoice, and use the color and wrap_help feature flags."
+description: "Reference for clap's Styles API — customize help and error output colors, apply ANSI text effects, control ColorChoice, and use the color feature flag."
 ---
 
 clap can render help text and error messages with terminal colors and text effects. Styling is entirely opt-in and configurable: you can apply a preset, build your own style from scratch, or disable styling altogether. This page covers the `Styles` struct, its component fields, the underlying `anstyle` types, and the feature flags that govern styling behavior.
@@ -201,11 +201,13 @@ Key builder methods on `Style`:
 | Method | Effect |
 |---|---|
 | `.bold()` | Bold text |
+| `.dimmed()` | Dimmed text |
 | `.underline()` | Underline |
 | `.italic()` | Italic |
+| `.strikethrough()` | Strikethrough |
 | `.fg_color(Some(Color::...))` | Set foreground color |
 | `.bg_color(Some(Color::...))` | Set background color |
-| `.on_default()` | Shorthand for default background (used with `AnsiColor`) |
+| `.effects(Effects::...)` | Set a combination of text effects |
 
 ### `AnsiColor`
 

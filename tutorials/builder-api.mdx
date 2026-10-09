@@ -409,16 +409,83 @@ Key relations demonstrated here:
 
 ## Custom Validation
 
-As a last resort for validation that cannot be expressed with built-in relations or value parsers, check conditions after parsing and use `Command::error` to emit a clap-formatted error message:
+As a last resort for validation that cannot be expressed with built-in relations or value parsers, retrieve the `Command` before parsing with `get_matches_mut()` and call `cmd.error()` to emit a clap-formatted error message:
 
 ```rust
-use clap::{Command, CommandFactory, ErrorKind};
+use std::path::PathBuf;
 
-// After calling get_matches():
-// let matches = cmd.get_matches();
-// if some_condition_fails {
-//     cmd.error(ErrorKind::InvalidValue, "explain the problem").exit();
-// }
+use clap::error::ErrorKind;
+use clap::{ArgAction, arg, command, value_parser};
+
+fn main() {
+    let mut cmd = command!() // requires `cargo` feature
+        .arg(arg!(--"set-ver" <VER> "set version manually"))
+        .arg(arg!(--major         "auto inc major").action(ArgAction::SetTrue))
+        .arg(arg!(--minor         "auto inc minor").action(ArgAction::SetTrue))
+        .arg(arg!(--patch         "auto inc patch").action(ArgAction::SetTrue))
+        .arg(arg!([INPUT_FILE] "some regular input").value_parser(value_parser!(PathBuf)))
+        .arg(
+            arg!(--"spec-in" <SPEC_IN> "some special input argument")
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(arg!(config: -c <CONFIG>).value_parser(value_parser!(PathBuf)));
+    let matches = cmd.get_matches_mut();
+
+    let mut major = 1;
+    let mut minor = 2;
+    let mut patch = 3;
+
+    let version = if let Some(ver) = matches.get_one::<String>("set-ver") {
+        if matches.get_flag("major") || matches.get_flag("minor") || matches.get_flag("patch") {
+            cmd.error(
+                ErrorKind::ArgumentConflict,
+                "Can't do relative and absolute version change",
+            )
+            .exit();
+        }
+        ver.clone()
+    } else {
+        let (maj, min, pat) = (
+            matches.get_flag("major"),
+            matches.get_flag("minor"),
+            matches.get_flag("patch"),
+        );
+        match (maj, min, pat) {
+            (true, false, false) => major += 1,
+            (false, true, false) => minor += 1,
+            (false, false, true) => patch += 1,
+            _ => {
+                cmd.error(
+                    ErrorKind::ArgumentConflict,
+                    "Can only modify one version field",
+                )
+                .exit();
+            }
+        };
+        format!("{major}.{minor}.{patch}")
+    };
+
+    println!("Version: {version}");
+
+    if matches.contains_id("config") {
+        let input = matches
+            .get_one::<PathBuf>("INPUT_FILE")
+            .or_else(|| matches.get_one::<PathBuf>("spec-in"))
+            .unwrap_or_else(|| {
+                cmd.error(
+                    ErrorKind::MissingRequiredArgument,
+                    "INPUT_FILE or --spec-in is required when using --config",
+                )
+                .exit()
+            })
+            .display();
+        println!(
+            "Doing work using input {} and config {}",
+            input,
+            matches.get_one::<PathBuf>("config").unwrap().display()
+        );
+    }
+}
 ```
 
 <Note>
@@ -455,12 +522,12 @@ clap surfaces most builder misconfiguration bugs through `debug_assert!` checks.
 
 ```rust
 #[test]
-fn verify_cli() {
-    build_cli().debug_assert();
+fn verify_cmd() {
+    cmd().debug_assert();
 }
 ```
 
-Where `build_cli()` is a function that constructs and returns your `Command` without calling `get_matches()`.
+Where `cmd()` is a function that constructs and returns your `Command` without calling `get_matches()`.
 
 <Tip>
   Keep your `Command` construction in a dedicated function (e.g., `fn build_cli() -> Command`) so you can call it from both `main` and your tests without duplicating code.

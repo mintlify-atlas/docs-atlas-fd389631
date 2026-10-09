@@ -371,7 +371,7 @@ let mut cmd = command!()
 
 let matches = cmd.get_matches_mut();
 
-if let Some(_ver) = matches.get_one::<String>("set-ver") {
+if let Some(ver) = matches.get_one::<String>("set-ver") {
     if matches.get_flag("major") || matches.get_flag("minor") || matches.get_flag("patch") {
         cmd.error(
             ErrorKind::ArgumentConflict,

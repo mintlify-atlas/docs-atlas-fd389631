@@ -77,7 +77,7 @@ Enable these explicitly in `Cargo.toml`:
 | Cargo env macros | `cargo` | Activates macros that read `CARGO_*` environment variables (e.g. `command!()`, `crate_version!()`). Disable if you are not building with Cargo. |
 | Env variable fallback | `env` | Lets arguments fall back to an environment variable when not supplied on the command line. |
 | Unicode | `unicode` | Full unicode support in argument values and help text, including emoji. |
-| Help wrapping | `wrap_help` | Wraps long help strings at the current terminal width using `textwrap`. |
+| Help wrapping | `wrap_help` | Wraps long help strings at the current terminal width (detected via `terminal_size`). |
 | Runtime strings | `string` | Allows dynamically generated strings via `clap::builder::Str`. |
 | Deprecation hints | `deprecated` | Opt-in guided migration warnings to help prepare for the next major release. |
 
@@ -122,10 +122,16 @@ You should see a generated help message with `--help` and `--version` flags. If 
 
 clap 4.x requires **Rust 1.85** or newer. This matches the `rust-version` field in the workspace `Cargo.toml`.
 
+The `rust-version` field in clap's `Cargo.toml` reflects this requirement:
+
 ```toml
-# Check your current Rust version
-[toolchain]
-channel = "stable"   # 1.85+ required
+rust-version = "1.85"  # MSRV
+```
+
+Check your installed version with:
+
+```bash
+rustc --version
 ```
 
 Run `rustup update stable` if your toolchain is older.

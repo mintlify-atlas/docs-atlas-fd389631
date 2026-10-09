@@ -351,6 +351,9 @@ let cmd = command!()
   <Card title="CommandName" icon="square-terminal">
     A command name, possibly resolved from `PATH`.
   </Card>
+  <Card title="CommandString" icon="code">
+    A single string containing a command and its arguments.
+  </Card>
   <Card title="Username" icon="user">
     An OS username (parsed from `/etc/passwd` on Unix).
   </Card>
@@ -360,8 +363,11 @@ let cmd = command!()
   <Card title="Url" icon="link">
     A full web address.
   </Card>
+  <Card title="EmailAddress" icon="envelope">
+    An email address.
+  </Card>
 </CardGroup>
 
 <Note>
-  Support varies by shell. `FilePath`, `DirPath`, and `AnyPath` work in both zsh and fish. `CommandWithArguments` requires `num_args(1..)` and `Command::trailing_var_arg(true)`.
+  Support varies by shell. `FilePath`, `DirPath`, and `AnyPath` work in both zsh and fish. `CommandWithArguments` requires `num_args(1..)` and `Command::trailing_var_arg(true)` and is only supported in zsh.
 </Note>
