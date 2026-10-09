@@ -1,0 +1,337 @@
+---
+title: "clap::ArgMatches — Parse Result Access Reference"
+sidebarTitle: "ArgMatches"
+description: "Complete reference for clap::ArgMatches in Rust. Retrieve typed values, flags, counts, subcommand results, and value sources after parsing CLI arguments."
+---
+
+`ArgMatches` is the container returned by `Command::get_matches()` and its variants. It holds every argument value, flag state, and subcommand result captured during parsing. All data retrieval methods take the same `id` string that was passed to `Arg::new()` when the argument was declared. Methods are generic over the expected type `T`, and clap panics in debug builds if you request a type that doesn't match how the argument was defined — use the `try_*` variants for programmatic error handling in those cases.
+
+---
+
+## Getting Typed Values
+
+<ParamField path="get_one::<T>(id)" type="fn(&self, id: &str) -> Option<&T>">
+  Returns a reference to the single value stored for the argument identified by `id`. Returns `None` if the argument was not provided and has no default. Returns `Some` if a default value was set, even if the user never supplied the argument explicitly — use `value_source()` to distinguish the two cases.
+
+  The type parameter `T` must match the type produced by the argument's `value_parser`. Use `String` for the default string parser, or the concrete type for custom parsers.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction, value_parser};
+
+  let m = Command::new("myapp")
+      .arg(
+          Arg::new("port")
+              .long("port")
+              .value_parser(value_parser!(u16))
+              .action(ArgAction::Set)
+              .required(true)
+      )
+      .get_matches_from(["myapp", "--port", "8080"]);
+
+  let port: u16 = *m.get_one("port").expect("required");
+  assert_eq!(port, 8080);
+  ```
+</ParamField>
+
+<ParamField path="get_many::<T>(id)" type="fn(&self, id: &str) -> Option<ValuesRef<'_, T>>">
+  Returns an iterator over all values collected for a multi-value or repeated argument. Returns `None` if the argument was not provided. Use `.collect::<Vec<_>>()` to materialize the values.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction, value_parser};
+
+  let m = Command::new("myprog")
+      .arg(
+          Arg::new("ports")
+              .short('p')
+              .action(ArgAction::Append)
+              .value_parser(value_parser!(usize))
+              .required(true)
+      )
+      .get_matches_from(["myprog", "-p", "22", "-p", "80", "-p", "2020"]);
+
+  let ports: Vec<usize> = m
+      .get_many("ports")
+      .expect("required")
+      .copied()
+      .collect();
+
+  assert_eq!(ports, [22, 80, 2020]);
+  ```
+</ParamField>
+
+---
+
+## Getting Flags and Counts
+
+<ParamField path="get_flag(id)" type="fn(&self, id: &str) -> bool">
+  Returns the boolean value for an argument whose action is `ArgAction::SetTrue` or `ArgAction::SetFalse`. Panics in debug builds if the argument's action is not one of those two. For `SetTrue`, returns `true` if the flag was used; for `SetFalse`, returns `false` if the flag was used (inverted semantics).
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("mycmd")
+      .arg(
+          Arg::new("verbose")
+              .long("verbose")
+              .action(ArgAction::SetTrue)
+      )
+      .get_matches_from(["mycmd", "--verbose"]);
+
+  assert!(m.get_flag("verbose"));
+  ```
+</ParamField>
+
+<ParamField path="get_count(id)" type="fn(&self, id: &str) -> u8">
+  Returns how many times a `ArgAction::Count` flag was used. Useful for verbosity levels like `-v`, `-vv`, `-vvv`. Panics in debug builds if the argument's action is not `ArgAction::Count`.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("mycmd")
+      .arg(
+          Arg::new("debug")
+              .long("debug")
+              .short('d')
+              .action(ArgAction::Count)
+      )
+      .get_matches_from(["mycmd", "-ddd"]);
+
+  assert_eq!(m.get_count("debug"), 3);
+
+  // In practice:
+  match m.get_count("debug") {
+      0 => println!("No debug"),
+      1 => println!("Some debug"),
+      2 => println!("More debug"),
+      _ => println!("All the debug"),
+  }
+  ```
+</ParamField>
+
+---
+
+## Checking Presence
+
+<ParamField path="contains_id(id)" type="fn(&self, id: &str) -> bool">
+  Returns `true` if the argument or group with the given ID is present in the match results. Because `default_value` is included in results, this always returns `true` for arguments that have a default. Combine with `value_source()` to distinguish user-supplied values from defaults.
+
+  `contains_id` also works with `ArgGroup` identifiers, letting you check whether any member of the group was used without knowing which specific member.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("myprog")
+      .arg(Arg::new("debug").short('d').action(ArgAction::SetTrue))
+      .get_matches_from(["myprog", "-d"]);
+
+  assert!(m.contains_id("debug"));
+  ```
+</ParamField>
+
+---
+
+## Subcommand Results
+
+<ParamField path="subcommand()" type="fn(&self) -> Option<(&str, &Self)>">
+  Returns the name and `ArgMatches` of the matched subcommand as a tuple. Returns `None` if no subcommand was provided. The returned `ArgMatches` is scoped to the subcommand and contains only that subcommand's arguments.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let app_m = Command::new("git")
+      .subcommand(Command::new("clone"))
+      .subcommand(Command::new("push"))
+      .subcommand(Command::new("commit"))
+      .get_matches_from(["git", "push"]);
+
+  match app_m.subcommand() {
+      Some(("clone",  sub_m)) => { /* clone was used */ }
+      Some(("push",   sub_m)) => { /* push was used */ }
+      Some(("commit", sub_m)) => { /* commit was used */ }
+      _                       => { /* no subcommand */ }
+  }
+  ```
+
+  When `allow_external_subcommands(true)` is set, unknown subcommands are captured and their trailing arguments are accessible via `sub_m.get_many::<OsString>("")`.
+</ParamField>
+
+<ParamField path="subcommand_name()" type="fn(&self) -> Option<&str>">
+  Returns just the name of the matched subcommand without borrowing its `ArgMatches`. Useful for routing logic before you need to access the subcommand's arguments.
+
+  ```rust
+  use clap::Command;
+
+  let app_m = Command::new("git")
+      .subcommand(Command::new("clone"))
+      .subcommand(Command::new("push"))
+      .get_matches_from(["git", "clone"]);
+
+  match app_m.subcommand_name() {
+      Some("clone")  => println!("Cloning..."),
+      Some("push")   => println!("Pushing..."),
+      _              => println!("No subcommand"),
+  }
+  ```
+</ParamField>
+
+<ParamField path="subcommand_matches(name)" type="fn(&self, name: &str) -> Option<&Self>">
+  Returns the `ArgMatches` for a specific named subcommand. Returns `None` if that subcommand was not invoked. Equivalent to matching on `subcommand()` but more ergonomic when you already know which subcommand you want to handle.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let app_m = Command::new("myprog")
+      .arg(Arg::new("debug").short('d').action(ArgAction::SetTrue))
+      .subcommand(
+          Command::new("test")
+              .arg(Arg::new("opt").long("option").action(ArgAction::Set))
+      )
+      .get_matches_from(["myprog", "-d", "test", "--option", "val"]);
+
+  assert!(app_m.get_flag("debug"));
+
+  if let Some(sub_m) = app_m.subcommand_matches("test") {
+      assert_eq!(
+          sub_m.get_one::<String>("opt").map(|s| s.as_str()),
+          Some("val")
+      );
+  }
+  ```
+</ParamField>
+
+---
+
+## Value Source
+
+<ParamField path="value_source(id)" type="fn(&self, id: &str) -> Option<ValueSource>">
+  Returns where the argument's value came from as a `ValueSource` enum. Variants include:
+
+  - `ValueSource::CommandLine` — the user supplied this value
+  - `ValueSource::EnvVariable` — the value came from an environment variable
+  - `ValueSource::DefaultValue` — the value is the argument's configured default
+
+  Returns `None` if the argument is not present at all.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+  use clap::parser::ValueSource;
+
+  let m = Command::new("myprog")
+      .arg(Arg::new("debug").short('d').action(ArgAction::SetTrue))
+      .get_matches_from(["myprog", "-d"]);
+
+  assert_eq!(m.value_source("debug"), Some(ValueSource::CommandLine));
+  ```
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+  use clap::parser::ValueSource;
+
+  // Detecting whether the user actually set a value vs. a default kicked in
+  let m = Command::new("myprog")
+      .arg(
+          Arg::new("output")
+              .long("output")
+              .default_value("stdout")
+              .action(ArgAction::Set)
+      )
+      .get_matches_from(["myprog"]);
+
+  if m.value_source("output") == Some(ValueSource::DefaultValue) {
+      println!("Using default output");
+  }
+  ```
+</ParamField>
+
+---
+
+## Argument Positions
+
+<ParamField path="indices_of(id)" type="fn(&self, id: &str) -> Option<Indices<'_>>">
+  Returns an iterator over the 1-based indices at which the argument's values appeared in the original argument list. Indices count value positions, not flag positions: for `--flag value`, only the index of `value` is recorded. Returns `None` if the argument was not present.
+
+  Useful when order among multiple arguments matters, such as determining the relative position of files or options.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(Arg::new("output").short('o').action(ArgAction::Set))
+      .arg(Arg::new("input").short('i').action(ArgAction::Set))
+      .get_matches_from(["prog", "-o", "file.txt", "-i", "in.txt"]);
+
+  // -o file.txt is at position 2, -i in.txt is at position 4
+  let o_idx: Vec<usize> = m.indices_of("output").unwrap().collect();
+  assert_eq!(o_idx, [2]);
+  ```
+</ParamField>
+
+---
+
+## Full example
+
+The following example shows a realistic pattern for reading different argument types from a single `ArgMatches` — combining flags, typed values, multiple values, subcommands, and value source inspection:
+
+```rust
+use std::path::PathBuf;
+use clap::{Command, Arg, ArgAction, arg, value_parser};
+use clap::parser::ValueSource;
+
+fn main() {
+    let matches = Command::new("myapp")
+        .version("1.0")
+        .arg(
+            Arg::new("verbose")
+                .short('v')
+                .action(ArgAction::Count)
+                .help("Increase verbosity (use multiple times)")
+        )
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .default_value("stdout")
+                .action(ArgAction::Set)
+                .help("Output destination")
+        )
+        .arg(
+            Arg::new("files")
+                .action(ArgAction::Append)
+                .value_parser(value_parser!(PathBuf))
+                .help("Input files")
+        )
+        .subcommand(
+            Command::new("process")
+                .about("Process files")
+                .arg(arg!(--dry-run "Skip writing output").action(ArgAction::SetTrue))
+        )
+        .get_matches();
+
+    // Count flag
+    let verbosity = matches.get_count("verbose");
+    println!("Verbosity level: {verbosity}");
+
+    // Typed single value with source detection
+    let output = matches.get_one::<String>("output").unwrap();
+    if matches.value_source("output") == Some(ValueSource::DefaultValue) {
+        println!("Output defaulted to: {output}");
+    } else {
+        println!("Output set to: {output}");
+    }
+
+    // Optional multi-value
+    if let Some(files) = matches.get_many::<PathBuf>("files") {
+        let paths: Vec<_> = files.collect();
+        println!("Processing files: {paths:?}");
+    }
+
+    // Subcommand dispatch
+    match matches.subcommand() {
+        Some(("process", sub_m)) => {
+            let dry = sub_m.get_flag("dry-run");
+            println!("Process subcommand (dry_run={dry})");
+        }
+        _ => println!("No subcommand"),
+    }
+}
+```

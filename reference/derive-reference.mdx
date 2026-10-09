@@ -1,0 +1,419 @@
+---
+title: "Derive API Reference: Attributes and Field Types"
+sidebarTitle: "Derive Reference"
+description: "Complete reference for clap's derive macros — Parser, Args, Subcommand, and ValueEnum — including all command, arg, and value attributes."
+---
+
+The derive API lets you define your CLI entirely in Rust structs and enums, and clap generates the argument parser at compile time. To use it, enable the `derive` feature flag in your `Cargo.toml`. This page is a complete reference for every attribute and field type that drives the derive macros.
+
+<Note>
+  Attributes always take precedence over inferred behavior. For example, an
+  explicit `#[arg(required = true)]` overrides what clap would infer from the
+  field type.
+</Note>
+
+## Overview
+
+The four derive traits each serve a distinct role:
+
+| Trait | Applied to | Purpose |
+|---|---|---|
+| `Parser` | `struct` or `enum` | Top-level CLI entry point |
+| `Args` | `struct` | Reusable argument group that can be flattened |
+| `Subcommand` | `enum` | Defines available subcommands |
+| `ValueEnum` | `enum` | Parses a value into one of a fixed set of variants |
+
+The anatomy of a fully annotated derive application looks like this:
+
+```rust
+use clap::{Parser, Args, Subcommand, ValueEnum};
+
+/// Doc comment
+#[derive(Parser)]
+#[command(CMD ATTRIBUTE)]
+#[group(GROUP ATTRIBUTE)]
+struct Cli {
+    /// Doc comment
+    #[arg(ARG ATTRIBUTE)]
+    field: UserType,
+
+    #[arg(value_enum, ARG ATTRIBUTE...)]
+    field: EnumValues,
+
+    #[command(flatten)]
+    delegate: Struct,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+/// Doc comment
+#[derive(Args)]
+#[command(PARENT CMD ATTRIBUTE)]
+#[group(GROUP ATTRIBUTE)]
+struct Struct {
+    /// Doc comment
+    #[command(ARG ATTRIBUTE)]
+    field: UserType,
+}
+
+/// Doc comment
+#[derive(Subcommand)]
+#[command(PARENT CMD ATTRIBUTE)]
+enum Command {
+    /// Doc comment
+    #[command(CMD ATTRIBUTE)]
+    Variant1(Struct),
+
+    /// Doc comment
+    #[command(CMD ATTRIBUTE)]
+    Variant2 {
+        /// Doc comment
+        #[arg(ARG ATTRIBUTE)]
+        field: UserType,
+    }
+}
+
+/// Doc comment
+#[derive(ValueEnum)]
+#[value(VALUE ENUM ATTRIBUTE)]
+enum EnumValues {
+    /// Doc comment
+    #[value(POSSIBLE VALUE ATTRIBUTE)]
+    Variant1,
+}
+
+let cli = Cli::parse();
+```
+
+## Attribute Terminology
+
+### Raw Attributes
+
+**Raw attributes** are forwarded directly to the underlying clap builder. Any [`Command`](https://docs.rs/clap/latest/clap/struct.Command.html), [`Arg`](https://docs.rs/clap/latest/clap/struct.Arg.html), or [`PossibleValue`](https://docs.rs/clap/latest/clap/builder/struct.PossibleValue.html) method can be used as an attribute. Raw attributes support two syntaxes:
+
+```rust,ignore
+#[arg(
+    global = true,              // name = arg form, for one-argument methods
+    required_if_eq("out", "file") // name(arg1, arg2, ...) form
+)]
+```
+
+- `method = arg` — only valid for methods that take a single argument.
+- `method(arg1, arg2)` — valid for any method.
+
+### Magic Attributes
+
+**Magic attributes** trigger special post-processing by the derive macro (defaults, inferences, special behavior). They are documented individually in the sections below and are more constrained in syntax — usually `attr = value` or `attr(value)`.
+
+---
+
+## Command Attributes
+
+Command attributes apply to the struct or enum deriving `Parser`, `Args`, or `Subcommand`, placed in `#[command(...)]`.
+
+### Magic Attributes
+
+| Attribute | Builder Method | Notes |
+|---|---|---|
+| `name = <expr>` | `Command::name` | Defaults to crate name (on `Parser`), or variant name (on `Subcommand`) |
+| `version [= <expr>]` | `Command::version` | Without `<expr>`: uses crate `version` from `Cargo.toml` |
+| `author [= <expr>]` | `Command::author` | Without `<expr>`: uses crate `authors` field. Requires a custom `help_template` to display. |
+| `about [= <expr>]` | `Command::about` | Without `<expr>`: uses crate `description`. Falls back to doc comment summary. |
+| `long_about [= <expr>]` | `Command::long_about` | Without value: uses full doc comment when a blank line is present |
+| `verbatim_doc_comment` | — | Minimizes pre-processing of doc comments |
+| `next_display_order` | `Command::next_display_order` | Controls display order of subsequent args |
+| `next_help_heading` | `Command::next_help_heading` | Sets the help heading for following args; scoped when used with `flatten` |
+| `rename_all = <str>` | — | Overrides field/variant name conversion for `Command::name` / `Arg::id` |
+| `rename_all_env = <str>` | — | Overrides field name conversion for env variable names |
+| `defer = <bool>` | `Command::defer` | Delay argument construction for subcommand enums |
+
+**Available `rename_all` values:** `"camelCase"`, `"kebab-case"` (default), `"PascalCase"`, `"SCREAMING_SNAKE_CASE"`, `"snake_case"`, `"lower"`, `"UPPER"`, `"verbatim"`
+
+**Available `rename_all_env` values:** Same as above, default is `"SCREAMING_SNAKE_CASE"`
+
+### Raw Attributes (Examples)
+
+```rust
+#[derive(Parser)]
+#[command(arg_required_else_help(true))]
+// translates to: cmd.arg_required_else_help(true)
+struct Cli { /* ... */ }
+```
+
+### Subcommand Variant Attributes
+
+Used on variants of an enum deriving `Subcommand`:
+
+| Attribute | Effect |
+|---|---|
+| `skip` | Ignore this variant |
+| `flatten` | Delegate to the variant for more subcommands (must impl `Subcommand`) |
+| `subcommand` | Nest subcommands under the current set |
+| `external_subcommand` | Enable `Command::allow_external_subcommand(true)`. Variant must be `Variant(Vec<String>)` or `Variant(Vec<OsString>)` |
+
+### Args Field Attributes
+
+Used on fields of a struct deriving `Args` or `Parser`:
+
+| Attribute | Effect |
+|---|---|
+| `flatten` | Delegate to the field for more arguments (must impl `Args`). Only `next_help_heading` is supported alongside `flatten`. |
+| `subcommand` | Delegate subcommand definition to the field (must impl `Subcommand`). Use `Option<T>` to make the subcommand optional. |
+
+---
+
+## ArgGroup Attributes
+
+These apply to the implicit `ArgGroup` created for every `Args` derive. Place them in `#[group(...)]`.
+
+Any [`ArgGroup` method](https://docs.rs/clap/latest/clap/struct.ArgGroup.html) can be used as a raw attribute.
+
+| Magic Attribute | Effect |
+|---|---|
+| `id = <expr>` | Sets the group ID. Defaults to the struct name. |
+| `skip [= <expr>]` | Ignore the field; fill it with `<expr>` (or `Default::default()` without a value) |
+
+<Note>
+  For structs, `multiple = true` is implied on the generated `ArgGroup`. Enum
+  support for ArgGroups is tracked at
+  [#2621](https://github.com/clap-rs/clap/issues/2621).
+</Note>
+
+---
+
+## Arg Attributes
+
+Arg attributes apply to individual fields, placed in `#[arg(...)]`. Without attributes, a field is a positional argument whose behavior is inferred from its type.
+
+### Magic Attributes
+
+| Attribute | Builder Method | Notes |
+|---|---|---|
+| `id = <expr>` | `Arg::id` | Defaults to the field name |
+| `value_parser [= <expr>]` | `Arg::value_parser` | Auto-selected via `value_parser!(T)` if not set |
+| `action [= <expr>]` | `Arg::action` | Auto-selected from field type if not set |
+| `help = <expr>` | `Arg::help` | Falls back to doc comment summary |
+| `long_help [= <expr>]` | `Arg::long_help` | Falls back to full doc comment when blank line present |
+| `verbatim_doc_comment` | — | Suppress doc comment pre-processing |
+| `short [= <char>]` | `Arg::short` | Without `<char>`: first character of the case-converted field name |
+| `long [= <str>]` | `Arg::long` | Without `<str>`: the case-converted field name |
+| `env [= <str>]` | `Arg::env` | Requires `env` feature. Without `<str>`: case-converted field name |
+| `value_enum` | — | Parse with `ValueEnum` |
+| `from_global` | — | Read a `global` argument regardless of subcommand depth |
+| `skip [= <expr>]` | — | Ignore this field; fill with `<expr>` or `Default::default()` |
+| `default_value = <str>` | `Arg::default_value` + `required(false)` | String-typed default |
+| `default_value_t [= <expr>]` | `Arg::default_value` + `required(false)` | Typed default; requires `Display` that round-trips with the parser |
+| `default_values_t = <expr>` | `Arg::default_values` + `required(false)` | For `Vec<T>` fields; `<expr>` must implement `IntoIterator<T>` |
+| `default_value_os_t [= <expr>]` | `Arg::default_value_os` + `required(false)` | OS-string typed default |
+| `default_values_os_t = <expr>` | `Arg::default_values_os` + `required(false)` | For `Vec<T>` with `Into<OsString>` |
+
+### Common Raw Attributes
+
+Any `Arg` method can be used directly:
+
+```rust
+#[arg(num_args(..=3))]         // arg.num_args(..=3)
+#[arg(required = true)]        // arg.required(true)
+#[arg(global = true)]          // arg.global(true)
+#[arg(conflicts_with = "other")] // arg.conflicts_with("other")
+#[arg(requires = "other")]     // arg.requires("other")
+#[arg(hide = true)]            // arg.hide(true)
+#[arg(last = true)]            // arg.last(true)
+#[arg(value_name = "FILE")]    // arg.value_name("FILE")
+```
+
+---
+
+## ValueEnum Attributes
+
+Applied to an enum with `#[value(...)]`.
+
+| Attribute | Effect |
+|---|---|
+| `rename_all = <str>` | Override variant name case conversion for `PossibleValue::new`. Default: `"kebab-case"` |
+
+---
+
+## Possible Value Attributes
+
+Applied to individual variants of a `ValueEnum` enum with `#[value(...)]`.
+
+Any [`PossibleValue` method](https://docs.rs/clap/latest/clap/builder/struct.PossibleValue.html) can be used as a raw attribute:
+
+```rust,ignore
+#[value(alias("foo"))]   // pv.alias("foo")
+```
+
+| Magic Attribute | Effect |
+|---|---|
+| `name = <expr>` | `PossibleValue::new`. Defaults to the case-converted variant name. |
+| `help = <expr>` | `PossibleValue::help`. Falls back to doc comment summary. |
+| `skip` | Ignore this variant |
+
+---
+
+## Field Types
+
+clap infers argument behavior from the Rust type of each field.
+
+### Subcommand Field Types
+
+| Type | Effect | Implied Behavior |
+|---|---|---|
+| `Option<T>` | Optional subcommand | — |
+| `T` | Required subcommand | `.subcommand_required(true).arg_required_else_help(true)` |
+
+### Arg Field Types
+
+| Type | Effect | Implied Behavior | Notes |
+|---|---|---|---|
+| `bool` | Flag | `.action(ArgAction::SetTrue)` | |
+| `Option<T>` | Optional argument | `.action(ArgAction::Set).required(false)` | |
+| `Option<Option<T>>` | Optional value for optional argument | `.action(ArgAction::Set).required(false).num_args(0..=1)` | |
+| `T` | Required argument | `.action(ArgAction::Set).required(!has_default)` | |
+| `Vec<T>` | Zero or more occurrences | `.action(ArgAction::Append).required(false)` | |
+| `Option<Vec<T>>` | Zero or more occurrences | `.action(ArgAction::Append).required(false)` | `None` when no args given |
+| `Vec<Vec<T>>` | Occurrences grouped by instance | `.action(ArgAction::Append).required(false)` | Requires `unstable-v5` |
+| `Option<Vec<Vec<T>>>` | Occurrences grouped by instance | `.action(ArgAction::Append).required(false)` | Requires `unstable-v5` |
+| `()` | User-defined | `.action(ArgAction::Set).required(false)` | |
+
+<Tip>
+  `value_parser!(T)` is called automatically for each field unless overridden
+  with `#[arg(value_parser = ...)]`.
+</Tip>
+
+<Warning>
+  `Option<Vec<T>>` yields `None` (not `vec![]`) when no arguments are provided,
+  giving you flexibility with `num_args(0..)`.
+</Warning>
+
+---
+
+## Doc Comments
+
+Doc comments on structs, enums, and fields are automatically used as help text.
+
+```rust
+use clap::Parser;
+
+/// I am a program and I work, just pass `-h`
+struct Foo {
+    /// Pass `-h` and you'll see me!
+    bar: String,
+}
+```
+
+This is equivalent to:
+
+```rust
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(about = "I am a program and I work, just pass `-h`", long_about = None)]
+struct Foo {
+    #[arg(short, help = "Pass `-h` and you'll see me!")]
+    bar: String,
+}
+```
+
+### Summary vs Long Help
+
+A doc comment is split into two parts by the first blank line:
+
+- **Before the blank line** → `Command::about` / `Arg::help` (shown with `-h`)
+- **The whole comment** → `Command::long_about` / `Arg::long_help` (shown with `--help`)
+
+```rust
+use clap::Parser;
+
+#[derive(Parser)]
+/// Hi there, I'm Robo!
+///
+/// I like beeping, stumbling, eating your electricity,
+/// and making records of you singing in a shower.
+/// Pay up, or I'll upload it to youtube!
+struct Robo {
+    /// Call my brother SkyNet.
+    ///
+    /// I am artificial superintelligence. I won't rest
+    /// until I'll have destroyed humanity. Enjoy your
+    /// pathetic existence, you mere mortals.
+    #[arg(long, action)]
+    kill_all_humans: bool,
+}
+```
+
+### Pre-processing
+
+Unless `verbatim_doc_comment` is used, clap applies these transformations:
+
+- Strips leading/trailing whitespace from every line.
+- Strips leading/trailing blank lines.
+- Treats each group of non-empty lines as a word-wrapped paragraph (replaces internal newlines with spaces).
+- Collapses extra blank lines to exactly one per paragraph break.
+- Removes a single trailing period (but not ellipses).
+
+<Note>
+  `verbatim_doc_comment` still removes one leading space per line (the space
+  between `///` and content) and still strips leading/trailing blank lines.
+</Note>
+
+### Priority
+
+Explicit attributes always take priority over doc comments:
+
+```rust
+#[derive(Parser)]
+/// This is the long about
+#[command(about = "This overrides the doc comment")]
+struct Cli {}
+```
+
+To suppress the long about generated from a doc comment, use `#[command(long_about = None)]`.
+
+---
+
+## Mixing Builder and Derive APIs
+
+The builder and derive APIs can be combined when you need runtime flexibility alongside compile-time declarations.
+
+### Augmenting a Builder Command with Derive Args
+
+Use `Args::augment_args` to add derive-based arguments to a manually constructed `Command`:
+
+```rust
+// From examples/derive_ref/augment_args.rs
+// (use Args::augment_args to add derived args to a builder Command)
+```
+
+### Augmenting a Builder Command with Derive Subcommands
+
+Use `Subcommand::augment_subcommands` to add derived subcommands to a builder `Command`:
+
+```rust
+// From examples/derive_ref/augment_subcommands.rs
+// (use Subcommand::augment_subcommands to add derived subcommands)
+```
+
+### Hand-Implemented Subcommands in a Derived Application
+
+You can manually implement the `Subcommand` trait using the builder API, then reference that type from a `#[command(subcommand)]` field in a derived struct.
+
+### Flattening Hand-Implemented Args into a Derived Application
+
+You can manually implement the `Args` trait using the builder API, then reference it from a `#[command(flatten)]` field in a derived struct.
+
+<Tip>
+  To get a `Command` instance from a derive type, call
+  `CommandFactory::command()`, which is implemented automatically when you
+  derive `Parser`.
+</Tip>
+
+---
+
+## Tips
+
+- Proactively validate your `Command` configuration by calling `Command::debug_assert()` in a test.
+- Document all args and commands with `#![deny(missing_docs)]` or `#[deny(clippy::missing_docs_in_private_items)]`.
+- To force a `Vec<T>` field to be treated as a plain `T`, reference the type via its full path: `std::vec::Vec<T>`.

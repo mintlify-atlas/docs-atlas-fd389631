@@ -1,0 +1,278 @@
+---
+title: "ValueEnum Derive Trait: Typed Enum Argument Values"
+sidebarTitle: "ValueEnum"
+description: "Reference for clap's ValueEnum derive trait — map CLI strings to typed enum variants, rename values, hide variants, and integrate with EnumValueParser."
+---
+
+The `ValueEnum` trait enables clap to parse a command-line string directly into one of an enum's variants. Deriving it automatically generates the mapping between string representations and enum values, validates that the user supplied a known variant, and populates the possible-values list shown in help output. It is the idiomatic way to accept a fixed set of choices as an argument.
+
+## Overview
+
+Annotate a unit enum with `#[derive(ValueEnum)]` and use it as a field type in a `Parser` struct. Mark the field with `#[arg(value_enum)]` so clap invokes the `EnumValueParser` for it. By default, variant names are converted to kebab-case for the CLI representation.
+
+```rust
+use clap::{Parser, ValueEnum};
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// What mode to run the program in
+    #[arg(value_enum)]
+    mode: Mode,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum Mode {
+    /// Run swiftly
+    Fast,
+    /// Crawl slowly but steadily
+    Slow,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    match cli.mode {
+        Mode::Fast => println!("Hare"),
+        Mode::Slow => println!("Tortoise"),
+    }
+}
+```
+
+Running `myapp fast` or `myapp slow` maps to the corresponding variant. Passing any other string produces a validation error listing the accepted values.
+
+---
+
+## The `ValueEnum` Trait
+
+```rust
+pub trait ValueEnum: Sized + Clone {
+    fn value_variants<'a>() -> &'a [Self];
+    fn from_str(input: &str, ignore_case: bool) -> Result<Self, String>;
+    fn to_possible_value(&self) -> Option<PossibleValue>;
+}
+```
+
+<ParamField path="value_variants" type="fn() -> &'a [Self]">
+  Returns a slice of all valid variants in display order. Used by clap to populate help output and by `EnumValueParser` to validate input.
+
+  ```rust
+  fn value_variants<'a>() -> &'a [Self]
+  ```
+
+  ```rust
+  let variants = Mode::value_variants();
+  // ["Fast", "Slow"] (or their CLI representations)
+  ```
+</ParamField>
+
+<ParamField path="from_str" type="fn(input: &str, ignore_case: bool) -> Result<Self, String>">
+  Parses a string into `Self` by matching against `to_possible_value()`. Returns `Err` with a message if no variant matches. Case-insensitive matching is enabled when `ignore_case` is `true`.
+
+  ```rust
+  fn from_str(input: &str, ignore_case: bool) -> Result<Self, String>
+  ```
+</ParamField>
+
+<ParamField path="to_possible_value" type="fn(&self) -> Option<PossibleValue>">
+  Returns the `PossibleValue` descriptor for this variant, including its CLI name, aliases, and help text. Returns `None` for skipped variants (those marked with `#[value(skip)]`).
+
+  ```rust
+  fn to_possible_value(&self) -> Option<PossibleValue>
+  ```
+</ParamField>
+
+---
+
+## `#[value(...)]` Attributes on the Enum
+
+Place `#[value(...)]` on the enum itself to configure global behaviour:
+
+<ParamField path="rename_all" type="attribute">
+  Overrides how variant names are converted to CLI strings.
+
+  | Value | Example (variant `MyValue`) |
+  |-------|-----------------------------|
+  | `"kebab-case"` (default) | `my-value` |
+  | `"snake_case"` | `my_value` |
+  | `"camelCase"` | `myValue` |
+  | `"PascalCase"` | `MyValue` |
+  | `"SCREAMING_SNAKE_CASE"` | `MY_VALUE` |
+  | `"lower"` | `myvalue` |
+  | `"UPPER"` | `MYVALUE` |
+  | `"verbatim"` | `MyValue` (unchanged) |
+
+  ```rust
+  #[derive(ValueEnum, Clone)]
+  #[value(rename_all = "SCREAMING_SNAKE_CASE")]
+  enum LogLevel {
+      Debug,    // CLI: "DEBUG"
+      Info,     // CLI: "INFO"
+      Warning,  // CLI: "WARNING"
+  }
+  ```
+</ParamField>
+
+---
+
+## `#[value(...)]` Attributes on Variants
+
+<ParamField path="skip" type="#[value(skip)]">
+  Excludes this variant from the set of parseable CLI values. The variant will not appear in help output and cannot be specified by users. Useful for internal sentinel values.
+
+  ```rust
+  #[derive(ValueEnum, Clone)]
+  enum Direction {
+      North,
+      South,
+      East,
+      West,
+      #[value(skip)]
+      Unknown,   // not a valid CLI choice
+  }
+  ```
+</ParamField>
+
+<ParamField path="name" type="attribute">
+  Overrides the CLI name for this specific variant, independent of the enum-level `rename_all` setting.
+
+  ```rust
+  #[derive(ValueEnum, Clone)]
+  enum ColorWhen {
+      Always,
+      Auto,
+      #[value(name = "off")]
+      Never,   // CLI: "off" instead of "never"
+  }
+  ```
+</ParamField>
+
+<ParamField path="help" type="attribute">
+  Sets the help text for this variant. Defaults to the doc comment summary if not specified.
+
+  ```rust
+  #[derive(ValueEnum, Clone)]
+  enum OutputFormat {
+      /// Human-readable text
+      Text,
+      #[value(help = "Machine-readable JSON output")]
+      Json,
+  }
+  ```
+</ParamField>
+
+---
+
+## Using with `#[arg(value_enum)]`
+
+Fields annotated with `#[arg(value_enum)]` use `EnumValueParser` automatically. This also enables `#[arg(default_value_t)]` without requiring a `Display` implementation:
+
+```rust
+use clap::{Parser, ValueEnum};
+
+#[derive(ValueEnum, Copy, Clone, Debug, PartialEq, Eq)]
+enum ColorWhen {
+    Always,
+    Auto,
+    Never,
+}
+
+impl std::fmt::Display for ColorWhen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_possible_value()
+            .expect("no values are skipped")
+            .get_name()
+            .fmt(f)
+    }
+}
+
+#[derive(Parser)]
+struct Cli {
+    #[arg(
+        long,
+        require_equals = true,
+        value_name = "WHEN",
+        num_args = 0..=1,
+        default_value_t = ColorWhen::Auto,
+        default_missing_value = "always",
+        value_enum
+    )]
+    color: ColorWhen,
+}
+```
+
+---
+
+## `EnumValueParser` Connection
+
+`#[arg(value_enum)]` is syntactic sugar for setting the `value_parser` to `EnumValueParser::<T>::new()`. You can also use it explicitly in the builder API:
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::{Parser, ValueEnum};
+
+    #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+    enum Mode {
+        Fast,
+        Slow,
+    }
+
+    #[derive(Parser)]
+    struct Cli {
+        /// What mode to run the program in
+        #[arg(value_enum)]
+        mode: Mode,
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, Command, ValueEnum};
+    use clap::builder::EnumValueParser;
+
+    #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+    enum Mode {
+        Fast,
+        Slow,
+    }
+
+    let matches = Command::new("myapp")
+        .arg(
+            Arg::new("mode")
+                .value_parser(EnumValueParser::<Mode>::new())
+                .required(true),
+        )
+        .get_matches();
+
+    let mode: Mode = *matches.get_one("mode").unwrap();
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Possible Values in Help
+
+clap automatically generates the `[possible values: ...]` list in help output from `value_variants()`. Doc comments on variants become per-value help text in the extended help (`--help`):
+
+```
+ARGS:
+    <MODE>  What mode to run the program in [possible values: fast, slow]
+```
+
+Variants marked with `#[value(skip)]` are excluded from both the help listing and the parser's accepted values.
+
+---
+
+## `value_parser!` Macro Integration
+
+For types that implement `ValueEnum`, `value_parser!(T)` resolves to `EnumValueParser::<T>::new()` automatically via the `ValueParserFactory` mechanism:
+
+```rust
+// These are equivalent:
+#[arg(value_enum)]
+mode: Mode,
+
+#[arg(value_parser = clap::value_parser!(Mode))]
+mode: Mode,
+```

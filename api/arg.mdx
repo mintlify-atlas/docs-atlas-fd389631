@@ -1,0 +1,568 @@
+---
+title: "clap::Arg — Argument Definition Builder Reference"
+sidebarTitle: "Arg"
+description: "Complete reference for clap::Arg in Rust. Define flags, options, and positional arguments with names, values, defaults, requirements, and validation rules."
+---
+
+`Arg` represents a single command-line argument — whether a boolean flag (`--verbose`), a named option (`--output file.txt`), or a positional value (`<FILE>`). Each `Arg` is constructed with a unique string identifier and configured through a fluent builder. Once built, arguments are added to a `Command` using `Command::arg()` or `Command::args()`. After parsing, their values are retrieved from `ArgMatches` using the same identifier string.
+
+---
+
+## Construction
+
+<ParamField path="Arg::new" type="fn(id: impl Into<Id>) -> Self">
+  Creates a new `Arg` with the given identifier. The `id` string is the key used in `ArgMatches` to retrieve the value. By default, a new `Arg` is a positional argument; add `.short()` or `.long()` to make it a flag or option.
+
+  ```rust
+  use clap::Arg;
+
+  let arg = Arg::new("output");
+  ```
+</ParamField>
+
+---
+
+## Names
+
+<ParamField path="short" type="fn(self, s: impl IntoResettable<char>) -> Self">
+  Sets the short single-character flag, used as `-X` on the command line (e.g., `-o`). By default `-h` and `-V` are reserved for help and version. To use those characters, first call `Command::disable_help_flag(true)` or `Command::disable_version_flag(true)`.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(Arg::new("output").short('o').action(ArgAction::Set))
+      .get_matches_from(["prog", "-o", "result.txt"]);
+
+  assert_eq!(m.get_one::<String>("output").map(|s| s.as_str()), Some("result.txt"));
+  ```
+</ParamField>
+
+<ParamField path="long" type="fn(self, l: impl IntoResettable<Str>) -> Self">
+  Sets the long flag name used as `--name` on the command line. Leading `--` characters in the supplied string are stripped automatically.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(Arg::new("cfg").long("config").action(ArgAction::Set))
+      .get_matches_from(["prog", "--config", "app.toml"]);
+
+  assert_eq!(m.get_one::<String>("cfg").map(|s| s.as_str()), Some("app.toml"));
+  ```
+</ParamField>
+
+<ParamField path="alias" type="fn(self, name: impl IntoResettable<Str>) -> Self">
+  Adds a hidden long-form alias. The alias works identically to the primary long name but does not appear in help text. Useful for backwards-compatible renaming.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(
+          Arg::new("output")
+              .long("output")
+              .alias("out")
+              .action(ArgAction::Set)
+      )
+      .get_matches_from(["prog", "--out", "file.txt"]);
+
+  assert_eq!(m.get_one::<String>("output").map(|s| s.as_str()), Some("file.txt"));
+  ```
+</ParamField>
+
+<ParamField path="short_alias" type="fn(self, name: impl IntoResettable<char>) -> Self">
+  Adds a hidden short-form alias character. Works like `alias()` but for single-character flags. The alias is not shown in help text.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(
+          Arg::new("verbose")
+              .short('v')
+              .short_alias('V')
+              .action(ArgAction::SetTrue)
+      )
+      .get_matches_from(["prog", "-V"]);
+
+  assert!(m.get_flag("verbose"));
+  ```
+</ParamField>
+
+---
+
+## Values
+
+<ParamField path="action" type="fn(self, action: impl IntoResettable<ArgAction>) -> Self">
+  Determines what happens when this argument is encountered. The most common actions are:
+
+  - `ArgAction::Set` — store a single value (default for options with a long/short name)
+  - `ArgAction::Append` — collect each occurrence into a list
+  - `ArgAction::SetTrue` / `ArgAction::SetFalse` — store a boolean
+  - `ArgAction::Count` — count how many times the flag appears
+  - `ArgAction::Help` — print help and exit
+  - `ArgAction::Version` — print version and exit
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(Arg::new("verbose").short('v').action(ArgAction::Count))
+      .get_matches_from(["prog", "-vvv"]);
+
+  assert_eq!(m.get_count("verbose"), 3);
+  ```
+</ParamField>
+
+<ParamField path="num_args" type="fn(self, qty: impl IntoResettable<ValueRange>) -> Self">
+  Specifies how many values this argument consumes per occurrence. Accepts an exact count (`1`), a range (`0..=1`, `1..`), or any type implementing `Into<ValueRange>`. Setting `0..=1` creates a flag/option hybrid where the value is optional.
+
+  ```rust
+  use clap::{Command, Arg};
+
+  // Accepts exactly 2 values
+  let m = Command::new("prog")
+      .arg(Arg::new("point").long("point").num_args(2))
+      .get_matches_from(["prog", "--point", "10", "20"]);
+
+  let vals: Vec<_> = m.get_many::<String>("point").unwrap().collect();
+  assert_eq!(vals, ["10", "20"]);
+  ```
+</ParamField>
+
+<ParamField path="value_name" type="fn(self, name: impl IntoResettable<Str>) -> Self">
+  Sets the placeholder name shown in usage and help output for this argument's value. For example, `.value_name("FILE")` produces `--output <FILE>` in help text.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("output")
+              .long("output")
+              .value_name("FILE")
+              .action(ArgAction::Set)
+      );
+  // Help shows: --output <FILE>
+  ```
+</ParamField>
+
+<ParamField path="value_hint" type="fn(self, value_hint: impl IntoResettable<ValueHint>) -> Self">
+  Provides a semantic hint about the expected value type. Used by shell completion generators to produce context-aware completions. Common variants: `ValueHint::FilePath`, `ValueHint::DirPath`, `ValueHint::Hostname`, `ValueHint::Url`.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+  use clap::builder::ValueHint;
+
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("config")
+              .long("config")
+              .action(ArgAction::Set)
+              .value_hint(ValueHint::FilePath)
+      );
+  ```
+</ParamField>
+
+<ParamField path="value_parser" type="fn(self, parser: impl IntoResettable<ValueParser>) -> Self">
+  Attaches a typed parser that validates and converts the raw string value. Use `value_parser!(T)` for standard Rust types, a slice `["a", "b"]` for an enumerated set, or any custom `TypedValueParser` implementation.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction, value_parser};
+
+  let m = Command::new("prog")
+      .arg(
+          Arg::new("port")
+              .long("port")
+              .value_parser(value_parser!(u16).range(1024..))
+              .action(ArgAction::Set)
+      )
+      .get_matches_from(["prog", "--port", "8080"]);
+
+  let port: u16 = *m.get_one("port").unwrap();
+  assert_eq!(port, 8080);
+  ```
+</ParamField>
+
+---
+
+## Defaults
+
+<ParamField path="default_value" type="fn(self, val: impl IntoResettable<OsStr>) -> Self">
+  Sets a value that is used when the argument is not provided on the command line. The default is returned by `ArgMatches::get_one()` just like an explicitly supplied value; use `ArgMatches::value_source()` to distinguish between the two.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(Arg::new("color").long("color").default_value("auto"))
+      .get_matches_from(["prog"]);
+
+  assert_eq!(m.get_one::<String>("color").map(|s| s.as_str()), Some("auto"));
+  ```
+</ParamField>
+
+<ParamField path="default_missing_value" type="fn(self, val: impl IntoResettable<OsStr>) -> Self">
+  Sets the value used when the flag is present but no value follows it. Combined with `num_args(0..=1)` this creates an optional-value option: `--flag` uses the missing-value default while `--flag=explicit` uses the supplied string.
+
+  ```rust
+  use clap::{Command, Arg};
+
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("color")
+              .long("color")
+              .num_args(0..=1)
+              .default_value("never")
+              .default_missing_value("always")
+      );
+
+  // --color          → "always"
+  // --color=auto     → "auto"
+  // (absent)         → "never"
+  ```
+</ParamField>
+
+<ParamField path="default_value_if" type="fn(self, arg_id: impl Into<Id>, predicate: impl Into<ArgPredicate>, default: impl IntoResettable<OsStr>) -> Self">
+  Sets a conditional default: if `arg_id` satisfies `predicate` at parse time, then this argument's default is set to `default`. The predicate can be a specific value string or `ArgPredicate::IsPresent`.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(Arg::new("flag").long("flag").action(ArgAction::SetTrue))
+      .arg(
+          Arg::new("mode")
+              .long("mode")
+              .default_value("normal")
+              .default_value_if("flag", "true", "debug")
+      )
+      .get_matches_from(["prog", "--flag"]);
+
+  assert_eq!(m.get_one::<String>("mode").map(|s| s.as_str()), Some("debug"));
+  ```
+</ParamField>
+
+---
+
+## Requirements
+
+<ParamField path="required" type="fn(self, yes: bool) -> Self">
+  Marks the argument as required. The parser returns an error if the argument is absent and no default or conditional override applies. Positional arguments without `required(true)` are optional by default.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let result = Command::new("prog")
+      .arg(Arg::new("input").required(true).action(ArgAction::Set))
+      .try_get_matches_from(["prog"]);
+
+  assert!(result.is_err());
+  ```
+</ParamField>
+
+<ParamField path="required_if_eq" type="fn(self, arg_id: impl Into<Id>, val: impl Into<OsStr>) -> Self">
+  Makes this argument required only when another specific argument equals a given value. The requirement is ignored if that condition is not met.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  // "output" is required when "format" equals "file"
+  let cmd = Command::new("prog")
+      .arg(Arg::new("format").long("format").action(ArgAction::Set))
+      .arg(
+          Arg::new("output")
+              .long("output")
+              .required_if_eq("format", "file")
+              .action(ArgAction::Set)
+      );
+  ```
+</ParamField>
+
+<ParamField path="required_unless_present" type="fn(self, arg_id: impl IntoResettable<Id>) -> Self">
+  Makes this argument required unless the specified other argument is present. This is the inverse of requiring both — useful for "provide X or Y but not neither" patterns.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("prog")
+      .arg(Arg::new("config").long("config").action(ArgAction::Set))
+      .arg(
+          Arg::new("host")
+              .long("host")
+              .required_unless_present("config")
+              .action(ArgAction::Set)
+      );
+  // --config app.toml     → ok (host not required)
+  // --host localhost      → ok
+  // (neither)             → error
+  ```
+</ParamField>
+
+---
+
+## Relations
+
+<ParamField path="conflicts_with" type="fn(self, arg_id: impl IntoResettable<Id>) -> Self">
+  Declares that this argument cannot be used together with another argument. The conflict is one-way in definition but enforced symmetrically: if A conflicts with B, the parser rejects both `--a --b` and `--b --a`.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let result = Command::new("prog")
+      .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
+      .arg(
+          Arg::new("plain")
+              .long("plain")
+              .conflicts_with("json")
+              .action(ArgAction::SetTrue)
+      )
+      .try_get_matches_from(["prog", "--json", "--plain"]);
+
+  assert!(result.is_err());
+  ```
+</ParamField>
+
+<ParamField path="requires" type="fn(self, arg_id: impl IntoResettable<Id>) -> Self">
+  Declares that when this argument is used, another argument must also be present. The dependency is enforced at parse time.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  // --output requires --format to be specified
+  let cmd = Command::new("prog")
+      .arg(Arg::new("format").long("format").action(ArgAction::Set))
+      .arg(
+          Arg::new("output")
+              .long("output")
+              .requires("format")
+              .action(ArgAction::Set)
+      );
+  ```
+</ParamField>
+
+<ParamField path="requires_if" type="fn(self, val: impl Into<ArgPredicate>, arg_id: impl Into<Id>) -> Self">
+  Conditionally requires another argument based on this argument's value or presence. When this argument's value matches `val` (or matches `ArgPredicate::IsPresent`), the named `arg_id` becomes required.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  // When --cfg is set to "special.conf", --opt is required
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("cfg")
+              .long("config")
+              .action(ArgAction::Set)
+              .requires_if("special.conf", "opt")
+      )
+      .arg(Arg::new("opt").long("option").action(ArgAction::Set));
+  ```
+</ParamField>
+
+---
+
+## Behavior
+
+<ParamField path="global" type="fn(self, yes: bool) -> Self">
+  Propagates this argument to all subcommands recursively. The value is accessible in both the parent and child `ArgMatches`. Useful for flags like `--verbose` or `--config` that apply everywhere.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("myapp")
+      .arg(
+          Arg::new("verbose")
+              .short('v')
+              .global(true)
+              .action(ArgAction::SetTrue)
+      )
+      .subcommand(Command::new("run"));
+  ```
+</ParamField>
+
+<ParamField path="hide" type="fn(self, yes: bool) -> Self">
+  Hides this argument from help output. The argument still works normally — it simply will not appear in `-h` or `--help` listings. Useful for internal flags or transitional arguments.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("internal-flag")
+              .long("internal")
+              .hide(true)
+              .action(ArgAction::SetTrue)
+      );
+  ```
+</ParamField>
+
+<ParamField path="last" type="fn(self, yes: bool) -> Self">
+  Marks a positional argument as consuming everything after a `--` separator. This is the idiomatic way to pass arbitrary arguments to a subprocess without clap interpreting them.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction, arg};
+
+  let cmd = Command::new("prog")
+      .arg(arg!([path] "Diff path").last(true));
+  // Usage: prog -- ./src/main.rs
+  ```
+</ParamField>
+
+<ParamField path="trailing_var_arg" type="fn(self, yes: bool) -> Self">
+  Allows this positional argument to consume all remaining values, including those that start with `-`. This is useful when wrapping another command and you want to pass its flags through verbatim.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("cargo")
+      .arg(
+          Arg::new("args")
+              .num_args(0..)
+              .trailing_var_arg(true)
+              .allow_hyphen_values(true)
+      );
+  ```
+</ParamField>
+
+<ParamField path="allow_hyphen_values" type="fn(self, yes: bool) -> Self">
+  Permits values that begin with a hyphen character. By default clap treats `-foo` as a flag name. Enable this when you need to accept negative numbers or hyphen-prefixed strings as values.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(
+          Arg::new("offset")
+              .long("offset")
+              .allow_hyphen_values(true)
+              .action(ArgAction::Set)
+      )
+      .get_matches_from(["prog", "--offset", "-42"]);
+
+  assert_eq!(m.get_one::<String>("offset").map(|s| s.as_str()), Some("-42"));
+  ```
+</ParamField>
+
+---
+
+## Environment Variables
+
+<ParamField path="env" type="fn(self, name: impl IntoResettable<OsStr>) -> Self">
+  Reads the argument's value from the named environment variable when the argument is not supplied on the command line. Requires the `env` feature (enabled by default). Command-line values always take precedence over environment variables.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("token")
+              .long("token")
+              .env("API_TOKEN")
+              .action(ArgAction::Set)
+      );
+  // $ API_TOKEN=secret prog   →  matches.get_one("token") == Some("secret")
+  // $ prog --token explicit   →  matches.get_one("token") == Some("explicit")
+  ```
+</ParamField>
+
+---
+
+## Help
+
+<ParamField path="help" type="fn(self, h: impl IntoResettable<StyledStr>) -> Self">
+  Sets the short description shown in `-h` help output. Keep this to one line. If `long_help` is not set, this text is also displayed for `--help`.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("verbose")
+              .short('v')
+              .action(ArgAction::SetTrue)
+              .help("Enable verbose output")
+      );
+  ```
+</ParamField>
+
+<ParamField path="long_help" type="fn(self, h: impl IntoResettable<StyledStr>) -> Self">
+  Sets a longer description shown only in `--help` output. Ideal for multi-sentence explanations, examples inline in help, or notes about interactions with other flags.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("output")
+              .long("output")
+              .action(ArgAction::Set)
+              .help("Output path")
+              .long_help(
+                  "Path to the output file.\n\n\
+                   If not specified, results are written to stdout. \
+                   Use '-' to explicitly request stdout."
+              )
+      );
+  ```
+</ParamField>
+
+<ParamField path="hide_possible_values" type="fn(self, yes: bool) -> Self">
+  Suppresses the automatic listing of allowed values in help output when a `value_parser` with a fixed set of values is used. Helpful when the value set is large or self-explanatory.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("prog")
+      .arg(
+          Arg::new("format")
+              .long("format")
+              .value_parser(["json", "csv", "parquet", "avro", "orc"])
+              .action(ArgAction::Set)
+              .hide_possible_values(true)
+      );
+  ```
+</ParamField>
+
+---
+
+## Full example
+
+This example builds a small version-bumping CLI that demonstrates short/long flags, value parsing, required groups (via `ArgGroup`), environment variables, and conditional defaults:
+
+```rust
+use std::path::PathBuf;
+use clap::{ArgAction, ArgGroup, Command, Arg, arg, value_parser};
+
+fn main() {
+    let matches = Command::new("bump")
+        .about("Bump a project version")
+        .arg(arg!(--"set-ver" <VER>  "Set version string manually"))
+        .arg(arg!(--major            "Increment major version").action(ArgAction::SetTrue))
+        .arg(arg!(--minor            "Increment minor version").action(ArgAction::SetTrue))
+        .arg(arg!(--patch            "Increment patch version").action(ArgAction::SetTrue))
+        .group(
+            ArgGroup::new("vers")
+                .required(true)
+                .args(["set-ver", "major", "minor", "patch"]),
+        )
+        .arg(
+            Arg::new("config")
+                .short('c')
+                .long("config")
+                .env("BUMP_CONFIG")
+                .value_parser(value_parser!(PathBuf))
+                .help("Config file path")
+        )
+        .get_matches();
+
+    if let Some(ver) = matches.get_one::<String>("set-ver") {
+        println!("Setting version to {ver}");
+    } else {
+        let kind = if matches.get_flag("major") { "major" }
+            else if matches.get_flag("minor") { "minor" }
+            else { "patch" };
+        println!("Incrementing {kind} version");
+    }
+}
+```

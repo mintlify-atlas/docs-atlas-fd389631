@@ -1,0 +1,266 @@
+---
+title: "Shell Completions: Generate Scripts with clap_complete"
+sidebarTitle: "Shell Completions"
+description: "Generate shell completion scripts for Bash, Zsh, Fish, Elvish, and PowerShell using clap_complete — at runtime or compile time via build.rs."
+---
+
+The `clap_complete` crate generates shell completion scripts directly from your `clap::Command` definition. Because the completions are derived from the same source of truth as your CLI, they stay in sync whenever you add or rename arguments — no hand-written completion scripts needed.
+
+## Adding clap_complete
+
+Add `clap_complete` to your `Cargo.toml`. For runtime generation (a `--generate` flag in your binary) add it as a regular dependency; for compile-time generation (a `build.rs` script) add it as a build dependency.
+
+<Tabs>
+  <Tab title="Runtime generation">
+    ```toml
+    [dependencies]
+    clap = { version = "4", features = ["derive"] }
+    clap_complete = "4"
+    ```
+  </Tab>
+  <Tab title="Compile-time (build.rs)">
+    ```toml
+    [dependencies]
+    clap = "4"
+
+    [build-dependencies]
+    clap = "4"
+    clap_complete = "4"
+    ```
+  </Tab>
+</Tabs>
+
+## The `Shell` Enum
+
+`clap_complete::aot::Shell` is a `ValueEnum`-implementing convenience type that covers every natively supported shell. You can use it directly as an argument value parser.
+
+```rust
+// From clap_complete/src/aot/shells/shell.rs
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum Shell {
+    /// Bourne Again `SHell` (bash)
+    Bash,
+    /// Elvish shell
+    Elvish,
+    /// Friendly Interactive `SHell` (fish)
+    Fish,
+    /// `PowerShell`
+    PowerShell,
+    /// Z `SHell` (zsh)
+    Zsh,
+}
+```
+
+Because `Shell` implements `ValueEnum`, you can pass it directly to `value_parser!`:
+
+```rust
+use clap_complete::aot::Shell;
+
+Arg::new("generator")
+    .long("generate")
+    .action(ArgAction::Set)
+    .value_parser(value_parser!(Shell))
+```
+
+`Shell` also has two helper constructors:
+
+- **`Shell::from_shell_path(path)`** — parses a shell from an executable path (e.g. `/bin/bash` → `Shell::Bash`).
+- **`Shell::from_env()`** — reads the `SHELL` environment variable; on Windows defaults to `PowerShell` when `SHELL` is unset.
+
+## Runtime Generation with `generate()`
+
+Use `generate()` when you want to let users produce a completion script themselves by running your binary with a special flag.
+
+```rust
+use clap::{Command, Arg, ValueHint, value_parser, ArgAction};
+use clap_complete::aot::{generate, Generator, Shell};
+use std::io;
+
+fn build_cli() -> Command {
+    Command::new("example")
+        .arg(Arg::new("file")
+            .help("some input file")
+            .value_hint(ValueHint::AnyPath))
+        .arg(Arg::new("generator")
+            .long("generate")
+            .action(ArgAction::Set)
+            .value_parser(value_parser!(Shell)))
+}
+
+fn print_completions<G: Generator>(generator: G, cmd: &mut Command) {
+    generate(generator, cmd, cmd.get_name().to_string(), &mut io::stdout());
+}
+
+let matches = build_cli().get_matches();
+
+if let Some(generator) = matches.get_one::<Shell>("generator").copied() {
+    let mut cmd = build_cli();
+    eprintln!("Generating completion file for {generator}...");
+    print_completions(generator, &mut cmd);
+}
+```
+
+<Note>
+  The `generate()` function signature is:
+
+  ```rust
+  pub fn generate<G, S>(generator: G, cmd: &mut Command, bin_name: S, buf: &mut dyn Write)
+  where
+      G: Generator,
+      S: Into<String>,
+  ```
+
+  Pass `&mut io::stdout()` to print directly, or any `Vec<u8>` buffer to capture the output.
+</Note>
+
+A user would then run:
+
+```console
+$ myapp --generate bash > ~/.local/share/bash-completion/completions/myapp
+$ myapp --generate zsh  > ~/.zfunc/_myapp
+$ myapp --generate fish > ~/.config/fish/completions/myapp.fish
+```
+
+## Compile-Time Generation with `generate_to()`
+
+Use `generate_to()` inside a `build.rs` to bake completion scripts into your project's build output. This is the preferred approach for projects distributed via a package manager.
+
+```rust
+// build.rs
+use clap_complete::{generate_to, shells::Bash};
+use std::env;
+use std::io::Error;
+
+include!("src/cli.rs"); // re-use your existing build_cli() function
+
+fn main() -> Result<(), Error> {
+    let outdir = match env::var_os("OUT_DIR") {
+        None => return Ok(()),
+        Some(outdir) => outdir,
+    };
+
+    let mut cmd = build_cli();
+    let path = generate_to(
+        Bash,
+        &mut cmd,  // generator
+        "myapp",   // bin name
+        outdir,    // output directory
+    )?;
+
+    println!("cargo:warning=completion file is generated: {path:?}");
+    Ok(())
+}
+```
+
+The `generate_to()` signature is:
+
+```rust
+pub fn generate_to<G, S, T>(
+    generator: G,
+    cmd: &mut Command,
+    bin_name: S,
+    out_dir: T,
+) -> Result<PathBuf, Error>
+where
+    G: Generator,
+    S: Into<String>,
+    T: Into<OsString>,
+```
+
+### Generating All Shells at Once
+
+`Shell` implements `ValueEnum`, so you can iterate over all variants:
+
+```rust
+use clap::ValueEnum;
+use clap_complete::{generate_to, Shell};
+use std::env;
+
+include!("src/cli.rs");
+
+fn main() -> Result<(), std::io::Error> {
+    let outdir = match env::var_os("OUT_DIR") {
+        None => return Ok(()),
+        Some(outdir) => outdir,
+    };
+
+    let mut cmd = build_cli();
+    for &shell in Shell::value_variants() {
+        generate_to(shell, &mut cmd, "myapp", &outdir)?;
+    }
+
+    Ok(())
+}
+```
+
+## Installing Completions
+
+<Tabs>
+  <Tab title="Bash">
+    ```bash
+    # For the current user
+    mkdir -p ~/.local/share/bash-completion/completions
+    myapp --generate bash > ~/.local/share/bash-completion/completions/myapp
+
+    # System-wide
+    myapp --generate bash | sudo tee /usr/share/bash-completion/completions/myapp
+    ```
+
+    Then reload your shell or run `source ~/.bashrc`.
+  </Tab>
+  <Tab title="Zsh">
+    ```zsh
+    # Add a fpath directory and generate the completion file
+    mkdir -p ~/.zfunc
+    myapp --generate zsh > ~/.zfunc/_myapp
+
+    # In ~/.zshrc, ensure fpath includes the directory (before compinit):
+    # fpath+=~/.zfunc
+    # autoload -Uz compinit && compinit
+    ```
+  </Tab>
+  <Tab title="Fish">
+    ```fish
+    myapp --generate fish > ~/.config/fish/completions/myapp.fish
+    ```
+
+    Fish picks up completions automatically — no reload needed.
+  </Tab>
+  <Tab title="PowerShell">
+    ```powershell
+    # Append to your PowerShell profile
+    myapp --generate powershell >> $PROFILE
+    ```
+
+    Then restart PowerShell or dot-source your profile.
+  </Tab>
+  <Tab title="Elvish">
+    ```elvish
+    myapp --generate elvish >> ~/.config/elvish/rc.elv
+    ```
+  </Tab>
+</Tabs>
+
+## Dynamic Completions (Unstable)
+
+For completions that depend on runtime state — file paths, database entries, remote resources — `clap_complete` provides an `unstable-dynamic` feature flag.
+
+<Warning>
+  The `unstable-dynamic` feature may introduce breaking changes between minor releases.
+  It is not covered by semver guarantees.
+</Warning>
+
+Enable it in your `Cargo.toml`:
+
+```toml
+[dependencies]
+clap_complete = { version = "4", features = ["unstable-dynamic"] }
+```
+
+With `unstable-dynamic` enabled, the crate exposes `engine::ArgValueCandidates`, `engine::ArgValueCompleter`, `engine::CompletionCandidate`, `engine::PathCompleter`, and `env::CompleteEnv` — allowing you to attach custom completion logic to individual arguments.
+
+<Tip>
+  See the `dynamic` example in the `clap_complete` repository for a working
+  demonstration of runtime-aware completions.
+</Tip>

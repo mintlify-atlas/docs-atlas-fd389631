@@ -1,0 +1,180 @@
+---
+title: "Frequently Asked Questions and Troubleshooting"
+sidebarTitle: "FAQ"
+description: "Answers to the most common clap questions — comparisons with structopt, when to use derive vs builder, default help subcommands, and pitfalls to avoid."
+---
+
+This page answers the most common questions about clap, including how it relates to other argument parsing libraries, how to choose between its two parsing APIs, and what to do when things do not work the way you expect. These answers are drawn directly from clap's own documentation source.
+
+<Note>
+  These comparisons are subjective and not meant critically. Every argument
+  parsing library has strengths and weaknesses, and sometimes it comes down to
+  personal taste. When in doubt, try a few and pick one you enjoy.
+</Note>
+
+---
+
+## Comparisons
+
+<Accordion title="How does clap compare to structopt?">
+Simple: clap *is* structopt. `structopt` started as a derive API built on top of clap v2. With clap v3, the structopt crate was forked and integrated directly into clap itself. `structopt` is now in [maintenance mode](https://github.com/TeXitoi/structopt/issues/516#issuecomment-989566094) following the release of `clap_derive`.
+
+The benefits of integrating structopt and clap include:
+
+- Easier cross-linking in documentation
+- Documentation parity between derive and builder APIs
+- A tighter design feedback loop — new features are now designed with derives in mind
+- Clearer endorsement of the structopt approach
+
+If you are migrating from `structopt`, see the [clap v3 CHANGELOG](https://github.com/clap-rs/clap/blob/v3-main/CHANGELOG.md#300---2021-12-31) and the [structopt migration guide](https://github.com/clap-rs/clap/blob/v3-main/CHANGELOG.md#migrate-structopt).
+</Accordion>
+
+<Accordion title="What are some reasons to use clap? (The Pitch)">
+clap is as fast and as lightweight as possible while still providing all the features you would expect from a modern argument parser. For the amount and type of features it offers, it remains about as fast as `getopts`.
+
+**Reasons to choose clap:**
+
+- You want all the nice CLI features your users may expect — help text, shell completions, error messages — but do not want to implement them yourself. You would rather focus on your application logic.
+- You do not want to sacrifice performance for those features.
+- You have complex requirements or conflicts between your various valid arguments.
+- You want subcommands. While other libraries support subcommands, they are not nearly as feature-rich as those provided by clap.
+- You want custom validation integrated into the argument parsing process, which allows for earlier failures, better error messages, and a more cohesive user experience.
+</Accordion>
+
+<Accordion title="What are some reasons not to use clap? (The Anti-Pitch)">
+Depending on the style you choose to define your arguments, clap can be verbose. It also offers so many fine-tuning knobs and dials that learning everything can seem overwhelming.
+
+The simple cases are kept simple, but when you start turning custom dials, it can become complex. clap is also opinionated about parsing. Even though much can be tweaked and tuned, there are certain features that clap implements in specific ways that may conflict with some users' requirements.
+
+If you need something minimal or have very non-standard parsing requirements, you might prefer a lighter-weight alternative. For comparisons, see [argparse-benchmarks](https://github.com/rust-cli/argparse-benchmarks-rs).
+</Accordion>
+
+---
+
+## Parser APIs
+
+<Accordion title="How many approaches are there to create a parser?">
+clap currently supports two primary APIs:
+
+- **[Derive API](https://docs.rs/clap/latest/clap/_derive/_tutorial/index.html)** — define your CLI in Rust structs and enums with `#[derive(Parser)]`
+- **[Builder API](https://docs.rs/clap/latest/clap/_tutorial/index.html)** — construct a `Command` programmatically with method chaining
+
+Previously supported approaches (now removed):
+
+- YAML-based configuration ([#3087](https://github.com/clap-rs/clap/issues/3087))
+- docopt-inspired usage parser ([#3086](https://github.com/clap-rs/clap/issues/3086))
+- `clap_app!` macro ([#2835](https://github.com/clap-rs/clap/issues/2835))
+
+Third-party experiments with other APIs:
+
+- [fncmd](https://github.com/yuhr/fncmd): function-attribute style
+- [clap-serde](https://github.com/aobatact/clap-serde): create a `Command` from a deserializer
+
+The two APIs can also be mixed — see [Mixing Builder and Derive APIs](/reference/derive-reference#mixing-builder-and-derive-apis).
+</Accordion>
+
+<Accordion title="When should I use the builder vs derive APIs?">
+The default recommendation is to use the **Derive API**:
+
+- Easier to read, write, and modify
+- Easier to keep argument declarations and value-reading code in sync
+- Easier to reuse argument groups — e.g., [clap-verbosity-flag](https://crates.io/crates/clap-verbosity-flag)
+
+Use the **Builder API** when you need:
+
+- Faster compile times, if you are not already using other procedural macros
+- More flexibility — for example, looking up an argument's values with `ArgMatches::get_many`, their ordering relative to other arguments with `ArgMatches::indices_of`, or what set them with `ArgMatches::value_source`. The derive API can only report values, not indices or source information.
+
+You can freely mix both APIs. See [Mixing Builder and Derive APIs](/reference/derive-reference#mixing-builder-and-derive-apis).
+</Accordion>
+
+---
+
+## Behavior Questions
+
+<Accordion title="Why is there a default subcommand of `help`?">
+There is only a default `help` subcommand when other subcommands have been defined. So it is opt-in by nature: you only get a `help` subcommand if you are actually using subcommands.
+
+Additionally, if you define your own `help` subcommand manually, the auto-generated one will not be added. It is only generated when the user has not defined one themselves.
+</Accordion>
+
+---
+
+## Common Pitfalls
+
+<Accordion title="My derive field is Vec<T> but it requires at least one value. How do I fix this?">
+`Vec<T>` fields imply `.action(ArgAction::Append).required(false)` — zero occurrences are allowed by default. To require at least one, add the `required` raw attribute:
+
+```rust
+#[arg(required = true)]
+files: Vec<String>,
+```
+
+This sets `.required(true)` while still accepting multiple values.
+</Accordion>
+
+<Accordion title="My Option<Vec<T>> field returns None instead of an empty Vec when nothing is passed.">
+This is intentional. `Option<Vec<T>>` yields `None` (not `vec![]`) when no arguments are provided. This gives you flexibility in designing your argument, such as distinguishing "not provided at all" from "provided but empty". If you always want a `Vec`, use `Vec<T>` directly.
+</Accordion>
+
+<Accordion title="My doc comment shows up differently with -h vs --help.">
+clap uses the first paragraph of a doc comment as `about` / `help` (shown by `-h`) and the entire doc comment as `long_about` / `long_help` (shown by `--help`). A paragraph break is defined by a blank comment line:
+
+```rust
+/// Short summary shown with -h
+///
+/// Full description shown only with --help.
+/// This can span multiple lines.
+#[derive(Parser)]
+struct Cli {}
+```
+
+If you only want the short summary to appear everywhere, use `#[command(long_about = None)]`.
+</Accordion>
+
+<Accordion title="My arg attribute doesn't seem to work — it's being ignored.">
+Check whether you are using a **magic attribute** with the correct syntax. Magic attributes (like `short`, `long`, `env`, `default_value_t`) require either `attr = value` or `attr(value)` syntax — they are not arbitrary method calls. Raw attributes support any `Arg` method, but magic attributes have special processing and constrained syntax.
+
+Also confirm you have the right feature flags enabled. For example, `env` requires the `env` Cargo feature.
+</Accordion>
+
+<Accordion title="I'm using verbatim_doc_comment but my formatting still changes.">
+`verbatim_doc_comment` still applies two transformations regardless:
+
+1. Removes one leading space from each line (the space between `///` and the content).
+2. Removes leading and trailing blank lines.
+
+Everything else — internal whitespace, ASCII art, markdown tables — is preserved.
+</Accordion>
+
+<Accordion title="How do I add arguments that are only available globally, across all subcommands?">
+Use `Arg::global(true)` (raw attribute form: `#[arg(global = true)]`). To read a global arg from within a subcommand's derive struct, use `#[arg(from_global)]` on a field of the same type.
+
+```rust
+#[derive(Parser)]
+struct Cli {
+    #[arg(long, global = true)]
+    verbose: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Run(RunArgs),
+}
+
+#[derive(Args)]
+struct RunArgs {
+    #[arg(from_global)]
+    verbose: bool,
+}
+```
+</Accordion>
+
+<Accordion title="Why does clap add --help and --version automatically?">
+clap generates `-h`/`--help` automatically when the `help` feature is enabled (it is on by default). It generates `-V`/`--version` automatically when you set a version via `#[command(version)]` or `Command::version`.
+
+To disable auto-generated help, call `Command::disable_help_flag(true)`. To disable auto-generated version, call `Command::disable_version_flag(true)`.
+</Accordion>

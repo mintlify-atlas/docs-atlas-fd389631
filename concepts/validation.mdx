@@ -1,0 +1,385 @@
+---
+title: "Argument Validation, Groups, and Constraints in clap 4"
+sidebarTitle: "Validation"
+description: "Validate values in clap 4 using ValueEnum, PossibleValue, value_parser, RangedI64ValueParser, ArgGroup, conflicts_with, requires, and required_if_eq."
+---
+
+Clap 4 offers multiple layers of validation so that your program never needs to manually check whether the user supplied a sensible combination of arguments. At the most basic level you can restrict an argument to a finite set of string literals. For type-safe parsing, a `value_parser` converts and validates the raw string in one step. `ArgGroup` enforces mutual exclusion or co-occurrence requirements across several arguments at once. Individual `Arg` methods such as `conflicts_with`, `requires`, `required_if_eq`, and `required_unless_present` handle finer-grained conditional rules. All violations produce a formatted error message with usage context automatically.
+
+---
+
+## Value Enums
+
+The cleanest way to restrict an argument to a known set of values is `#[derive(ValueEnum)]`. Clap generates the list of accepted values, case-insensitive matching, and completion hints automatically.
+
+```rust
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(ValueEnum, Copy, Clone, Debug, PartialEq, Eq)]
+enum ColorWhen {
+    Always,
+    Auto,
+    Never,
+}
+
+impl std::fmt::Display for ColorWhen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_possible_value()
+            .expect("no values are skipped")
+            .get_name()
+            .fmt(f)
+    }
+}
+```
+
+Use the enum with `#[arg(value_enum)]` in the derive API:
+
+```rust
+#[derive(Debug, Subcommand)]
+enum Commands {
+    Diff {
+        #[arg(
+            long,
+            require_equals = true,
+            value_name = "WHEN",
+            num_args = 0..=1,
+            default_value_t = ColorWhen::Auto,
+            default_missing_value = "always",
+            value_enum
+        )]
+        color: ColorWhen,
+    },
+}
+```
+
+The user can pass `--color always`, `--color=auto`, or omit the value entirely to get the `default_missing_value`.
+
+---
+
+## Possible Values with `PossibleValue`
+
+For the builder API, pass a slice of strings or `PossibleValue` instances to `.value_parser(…)`.
+
+```rust
+use clap::{Arg, Command};
+
+let cmd = Command::new("prog")
+    .arg(Arg::new("speed").value_parser(["fast", "slow"]));
+
+let result = cmd.try_get_matches_from(vec!["prog", "other"]);
+assert_eq!(
+    result.unwrap_err().kind(),
+    clap::error::ErrorKind::InvalidValue
+);
+```
+
+`PossibleValue` gives you extra control: per-value help text, hidden aliases, and the ability to hide individual values from the help listing.
+
+```rust
+use clap::builder::PossibleValue;
+
+// A value with help text shown in completions
+PossibleValue::new("slow").help("not fast");
+
+// A hidden value — accepted but not shown in help
+PossibleValue::new("secret").hide(true);
+
+// An alias that normalises user input
+PossibleValue::new("slow").alias("not-fast");
+
+// Multiple hidden aliases at once
+PossibleValue::new("slow").aliases(["not-fast", "snake-like"]);
+```
+
+---
+
+## Custom `value_parser`
+
+Any function or closure with the signature `Fn(&str) -> Result<T, E>` can be wrapped in `ValueParser::new`. This is the escape hatch when the built-in parsers are not sufficient.
+
+```rust
+use clap::{Arg, Command, builder::ValueParser};
+
+fn parse_key_val(s: &str) -> Result<(String, String), String> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
+    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+}
+
+let cmd = Command::new("prog")
+    .arg(
+        Arg::new("define")
+            .short('D')
+            .long("define")
+            .value_parser(parse_key_val),
+    );
+```
+
+The `value_parser!` macro selects the right built-in parser for any type that implements `ValueParserFactory`:
+
+```rust
+use clap::{Arg, Command, value_parser};
+use std::path::PathBuf;
+
+let cmd = Command::new("prog")
+    .arg(
+        Arg::new("output")
+            .short('o')
+            .value_parser(value_parser!(PathBuf)),
+    );
+```
+
+### `TypedValueParser`
+
+Implement the `TypedValueParser` trait for full control, including access to the `Command` and `Arg` during parsing. The trait also provides a `.map(f)` combinator to post-process any existing parser's output:
+
+```rust
+use clap::{Arg, ArgAction, Command};
+use clap::builder::{BoolishValueParser, TypedValueParser as _};
+
+let cmd = Command::new("mycmd")
+    .arg(
+        Arg::new("flag")
+            .long("flag")
+            .action(ArgAction::SetTrue)
+            .value_parser(
+                BoolishValueParser::new()
+                    .map(|b| -> usize { if b { 10 } else { 5 } })
+            )
+    );
+
+let m = cmd.clone().try_get_matches_from(["mycmd", "--flag"]).unwrap();
+assert_eq!(m.get_one::<usize>("flag").copied(), Some(10));
+
+let m = cmd.try_get_matches_from(["mycmd"]).unwrap();
+assert_eq!(m.get_one::<usize>("flag").copied(), Some(5));
+```
+
+---
+
+## Range Constraints with `RangedI64ValueParser`
+
+`RangedI64ValueParser` parses a string to an integer and enforces a numeric range in one step. The `value_parser!` macro produces one automatically for integer primitives; call `.range(…)` to tighten the bounds.
+
+```rust
+use clap::{Arg, Command, value_parser};
+
+let cmd = Command::new("prog")
+    .arg(
+        Arg::new("port")
+            .long("port")
+            .value_parser(value_parser!(u16).range(3000..)),
+    );
+```
+
+You can also instantiate `RangedI64ValueParser` directly for output types that differ from the source integer:
+
+```rust
+use clap::builder::RangedI64ValueParser;
+
+// Parse as i64, output as i32, restricted to -1..200
+let value_parser = RangedI64ValueParser::<i32>::new().range(-1..200);
+```
+
+Values outside the range produce `ErrorKind::ValueValidation` with a clear message showing the allowed bounds.
+
+---
+
+## Argument Groups
+
+`ArgGroup` clusters arguments for group-level validation: you can require exactly one from the group (`multiple(false)`, the default) or at least one (`required(true)`), or use the group as a target in other `requires`/`conflicts_with` rules.
+
+### Requiring Exactly One of a Set
+
+```rust
+use clap::{ArgGroup, arg, command};
+
+let matches = command!()
+    .arg(arg!(--"set-ver" <VER> "set version manually"))
+    .arg(arg!(--major         "auto inc major").action(clap::ArgAction::SetTrue))
+    .arg(arg!(--minor         "auto inc minor").action(clap::ArgAction::SetTrue))
+    .arg(arg!(--patch         "auto inc patch").action(clap::ArgAction::SetTrue))
+    .group(
+        ArgGroup::new("vers")
+            .required(true)
+            .args(["set-ver", "major", "minor", "patch"]),
+    )
+    .get_matches();
+```
+
+Using two args from the group (`--major --patch`) produces `ErrorKind::ArgumentConflict`. Using none produces `ErrorKind::MissingRequiredArgument`.
+
+<Note>
+  To allow **multiple** args from the same group to be used together, call `.multiple(true)` on the `ArgGroup`. The default is `false` (mutually exclusive).
+</Note>
+
+### Checking Which Group Arg Was Used
+
+```rust
+use clap::{ArgGroup, Id, arg, command};
+
+let result = command!()
+    .arg(arg!(--"set-ver" <ver> "set the version manually"))
+    .arg(arg!(--major           "auto increase major"))
+    .arg(arg!(--minor           "auto increase minor"))
+    .arg(arg!(--patch           "auto increase patch"))
+    .group(
+        ArgGroup::new("vers")
+            .args(["set-ver", "major", "minor", "patch"])
+            .required(true),
+    )
+    .try_get_matches_from(vec!["cmd", "--major"]);
+
+let matches = result.unwrap();
+assert!(matches.contains_id("vers"));
+assert_eq!(
+    matches.get_one::<Id>("vers").expect("`vers` is required").as_str(),
+    "major"
+);
+```
+
+### Group-Level `requires` and `conflicts_with`
+
+You can reference a group by name in argument-level `requires` to express "if `-c` is used, at least one of the `input` group must also be present":
+
+```rust
+use clap::{ArgGroup, arg, command, value_parser};
+use std::path::PathBuf;
+
+let matches = command!()
+    .arg(
+        arg!([INPUT_FILE] "some regular input")
+            .value_parser(value_parser!(PathBuf))
+            .group("input"),
+    )
+    .arg(
+        arg!(--"spec-in" <SPEC_IN> "some special input argument")
+            .value_parser(value_parser!(PathBuf))
+            .group("input"),
+    )
+    .arg(
+        arg!(config: -c <CONFIG>)
+            .value_parser(value_parser!(PathBuf))
+            .requires("input"),
+    )
+    .get_matches();
+```
+
+---
+
+## Per-Argument Relations
+
+### `conflicts_with`
+
+Declare that two arguments cannot be used together:
+
+```rust
+use clap::{Arg, ArgAction, Command};
+
+let result = Command::new("prog")
+    .arg(
+        Arg::new("debug")
+            .long("debug")
+            .action(ArgAction::SetTrue)
+            .conflicts_with("color"),
+    )
+    .arg(Arg::new("color").long("color").action(ArgAction::SetTrue))
+    .try_get_matches_from(vec!["prog", "--debug", "--color"]);
+
+assert_eq!(
+    result.unwrap_err().kind(),
+    clap::error::ErrorKind::ArgumentConflict
+);
+```
+
+Use `.conflicts_with_all(["a", "b"])` to list multiple conflicting arguments.
+
+### `requires`
+
+Declare that argument A requires argument B to also be present:
+
+```rust
+use clap::{Arg, ArgAction, Command};
+
+// --output requires --input
+let cmd = Command::new("prog")
+    .arg(Arg::new("input").long("input").action(ArgAction::Set))
+    .arg(
+        Arg::new("output")
+            .long("output")
+            .action(ArgAction::Set)
+            .requires("input"),
+    );
+```
+
+### `required_if_eq`
+
+Make an argument required only when another argument has a specific value:
+
+```rust
+use clap::{Arg, ArgAction, Command};
+
+// --ca-cert is required when --mode=tls
+let cmd = Command::new("prog")
+    .arg(Arg::new("mode").long("mode").action(ArgAction::Set))
+    .arg(
+        Arg::new("ca-cert")
+            .long("ca-cert")
+            .action(ArgAction::Set)
+            .required_if_eq("mode", "tls"),
+    );
+```
+
+### `required_unless_present`
+
+Make an argument required unless a specific other argument is already present:
+
+```rust
+use clap::{Arg, ArgAction, Command};
+
+// --config is required unless --no-config is set
+let cmd = Command::new("prog")
+    .arg(
+        Arg::new("no-config")
+            .long("no-config")
+            .action(ArgAction::SetTrue),
+    )
+    .arg(
+        Arg::new("config")
+            .long("config")
+            .action(ArgAction::Set)
+            .required_unless_present("no-config"),
+    );
+```
+
+---
+
+## Creating Custom Validation Errors
+
+When clap's built-in rules cannot express your constraint, call `cmd.error(…)` to construct a properly formatted error and exit:
+
+```rust
+use clap::error::ErrorKind;
+use clap::{ArgAction, arg, command};
+
+let mut cmd = command!()
+    .arg(arg!(--"set-ver" <VER> "set version manually"))
+    .arg(arg!(--major "auto inc major").action(ArgAction::SetTrue))
+    .arg(arg!(--minor "auto inc minor").action(ArgAction::SetTrue))
+    .arg(arg!(--patch "auto inc patch").action(ArgAction::SetTrue));
+
+let matches = cmd.get_matches_mut();
+
+if let Some(_ver) = matches.get_one::<String>("set-ver") {
+    if matches.get_flag("major") || matches.get_flag("minor") || matches.get_flag("patch") {
+        cmd.error(
+            ErrorKind::ArgumentConflict,
+            "Can't do relative and absolute version change",
+        )
+        .exit();
+    }
+}
+```
+
+`cmd.error(kind, message)` formats the error with the program's usage, then `.exit()` prints it to stderr and terminates with a non-zero exit code. The full error-handling API is described in the [Help and Errors guide](/concepts/help-and-errors).

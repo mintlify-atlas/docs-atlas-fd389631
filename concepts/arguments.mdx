@@ -1,0 +1,367 @@
+---
+title: "Argument Types, ArgAction, and Defaults in clap 4.x"
+sidebarTitle: "Arguments"
+description: "Learn how clap 4 defines positional arguments, options, flags, multi-value args, ArgAction variants, ValueHint, and default value rules."
+---
+
+Every command-line program accepts user input through arguments — the words and tokens that follow the program name in a shell. Clap organises these inputs into three broad categories: **positional arguments** (matched by position in the command), **options** (named with a leading `--` or `-` and usually accepting a value), and **flags** (named switches that carry no separate value). On top of this structure, clap 4 provides `ArgAction` to control what happens when an argument is encountered, plus helpers for default values, shell-completion hints, and required/optional rules. All argument configuration flows through the `Arg` builder returned by `Arg::new`.
+
+---
+
+## Positional Arguments
+
+A positional argument is one that has no short or long prefix — it is matched purely by its position in the argument list. When you call `Arg::new` without calling `.short()` or `.long()`, the result is a positional.
+
+```rust
+use clap::{Arg, command};
+
+fn main() {
+    let matches = command!()
+        .arg(Arg::new("name"))
+        .get_matches();
+
+    println!("name: {:?}", matches.get_one::<String>("name"));
+}
+```
+
+The value is retrieved with `matches.get_one::<String>("name")`. Because no `.required(true)` is set, the argument is optional by default.
+
+<Tip>
+  Positional arguments are displayed in the usage line in the order they are
+  added. Use `Arg::index` explicitly when you need a specific position.
+</Tip>
+
+---
+
+## Options (Named Arguments with a Value)
+
+An option combines a name (`--name` or `-n`) with an associated value. Adding `.short('n')` or `.long("name")` to an `Arg` promotes it from positional to an option.
+
+```rust
+use clap::{Arg, command};
+
+fn main() {
+    let matches = command!()
+        .arg(Arg::new("name").short('n').long("name"))
+        .get_matches();
+
+    println!("name: {:?}", matches.get_one::<String>("name"));
+}
+```
+
+The user can supply either `--name alice` or `-n alice`. Both short and long forms may be set on the same `Arg`.
+
+### Short and Long Names, Aliases
+
+```rust
+use clap::{Arg, ArgAction, command};
+
+let cmd = command!()
+    .arg(
+        Arg::new("config")
+            .short('c')
+            .long("config")
+            .action(ArgAction::Set)
+            .alias("cfg")               // hidden long alias
+            .visible_alias("conf")      // visible alias shown in help
+            .short_alias('k')           // hidden short alias
+    );
+```
+
+- `.alias("cfg")` — a hidden long alias; usable on the CLI but not shown in help.
+- `.visible_alias("conf")` — shown in help output.
+- `.short_alias('k')` / `.visible_short_alias('k')` — same concept for single-character aliases.
+
+---
+
+## Flags (Boolean Presence Switches)
+
+A flag is an option that carries no separate value — the user either passes it or does not. The idiomatic way is `ArgAction::SetTrue`, which stores `false` by default and `true` when the flag is present.
+
+```rust
+use clap::{Arg, ArgAction, command};
+
+fn main() {
+    let matches = command!()
+        .arg(
+            Arg::new("verbose")
+                .short('v')
+                .long("verbose")
+                .action(ArgAction::SetTrue),
+        )
+        .get_matches();
+
+    println!("verbose: {:?}", matches.get_flag("verbose"));
+}
+```
+
+Use `matches.get_flag("verbose")` to read a `bool`. When the flag is absent the value is `false`; when present it is `true`.
+
+---
+
+## ArgAction: Controlling Parse Behaviour
+
+`ArgAction` is the enum that decides what clap does with an argument each time it is encountered. Every `Arg` has an action; for options and flags it must be set explicitly.
+
+<Tabs>
+  <Tab title="Set">
+    **`ArgAction::Set`** — store a single value; seeing the flag twice is an error unless `Command::args_override_self` is set.
+
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(
+            Arg::new("flag")
+                .long("flag")
+                .action(ArgAction::Set)
+        );
+
+    let matches = cmd.try_get_matches_from(["mycmd", "--flag", "value"]).unwrap();
+    assert!(matches.contains_id("flag"));
+    assert_eq!(
+        matches.get_many::<String>("flag")
+               .unwrap_or_default()
+               .map(|v| v.as_str())
+               .collect::<Vec<_>>(),
+        vec!["value"]
+    );
+    ```
+  </Tab>
+  <Tab title="Append">
+    **`ArgAction::Append`** — accumulate every occurrence into a list.
+
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(
+            Arg::new("flag")
+                .long("flag")
+                .action(ArgAction::Append)
+        );
+
+    let matches = cmd
+        .try_get_matches_from(["mycmd", "--flag", "value1", "--flag", "value2"])
+        .unwrap();
+    assert_eq!(
+        matches.get_many::<String>("flag")
+               .unwrap_or_default()
+               .map(|v| v.as_str())
+               .collect::<Vec<_>>(),
+        vec!["value1", "value2"]
+    );
+    ```
+  </Tab>
+  <Tab title="SetTrue / SetFalse">
+    **`ArgAction::SetTrue`** — no value accepted; stores `true` when present, `false` when absent.
+
+    **`ArgAction::SetFalse`** — the inverse: stores `false` when present, `true` when absent. Useful for opt-out flags.
+
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(Arg::new("flag").long("flag").action(ArgAction::SetTrue));
+
+    let m = cmd.clone().try_get_matches_from(["mycmd", "--flag"]).unwrap();
+    assert_eq!(m.get_flag("flag"), true);
+
+    let m = cmd.try_get_matches_from(["mycmd"]).unwrap();
+    assert_eq!(m.get_flag("flag"), false);
+    ```
+  </Tab>
+  <Tab title="Count">
+    **`ArgAction::Count`** — increment a `u8` counter each time the flag appears; starts at `0`.
+
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(Arg::new("flag").long("flag").action(ArgAction::Count));
+
+    let m = cmd
+        .try_get_matches_from(["mycmd", "--flag", "--flag"])
+        .unwrap();
+    assert_eq!(m.get_count("flag"), 2);
+    ```
+
+    A common use case is `-v -v -v` for increasing verbosity levels.
+  </Tab>
+  <Tab title="Help / Version">
+    **`ArgAction::Help`** — print help and exit. Clap adds `-h`/`--help` automatically, but you can register additional help triggers.
+
+    **`ArgAction::Version`** — print the version string and exit. Requires `.version("…")` on the `Command`.
+
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(
+            Arg::new("special-help")
+                .short('?')
+                .action(ArgAction::Help)
+        );
+
+    // The built-in -h still works
+    let err = cmd.clone().try_get_matches_from(["mycmd", "-h"]).unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+
+    // And so does the new -?
+    let err = cmd.try_get_matches_from(["mycmd", "-?"]).unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+    ```
+
+    <Note>
+      `ArgAction::HelpShort` and `ArgAction::HelpLong` let you bind a custom trigger to only the short or long help format respectively.
+    </Note>
+  </Tab>
+</Tabs>
+
+---
+
+## Multiple Values with `num_args`
+
+By default an option accepts exactly one value. Use `.num_args(…)` to accept a range.
+
+```rust
+use clap::{Arg, ArgAction, Command};
+
+let cmd = Command::new("mycmd")
+    .arg(
+        Arg::new("some_opt")
+            .long("opt")
+            .action(ArgAction::Set)
+            .num_args(2),  // exactly two values
+    );
+```
+
+Common range forms:
+
+| Expression | Meaning |
+|---|---|
+| `num_args(1)` | Exactly one value (the default for `Set`/`Append`) |
+| `num_args(2)` | Exactly two values |
+| `num_args(1..=3)` | Between one and three values |
+| `num_args(1..)` | One or more values |
+| `num_args(0..=1)` | Zero or one value (flag/option hybrid) |
+
+Combine `num_args(0..=1)` with `default_missing_value` to create a flag that optionally accepts a value (see the `git diff --color` example in the [Subcommands guide](/concepts/subcommands)).
+
+---
+
+## Default Values and `default_missing_value`
+
+### `default_value`
+
+Set a fallback when the user does not provide the argument at all:
+
+```rust
+use clap::{Arg, Command};
+
+let m = Command::new("prog")
+    .arg(
+        Arg::new("color")
+            .long("color")
+            .default_value("auto"),
+    )
+    .get_matches_from(["prog"]);
+
+assert_eq!(m.get_one::<String>("color").map(String::as_str), Some("auto"));
+```
+
+### `default_missing_value`
+
+Set a fallback used when the flag is supplied *without* a value (only meaningful with `num_args(0..=1)`):
+
+```rust
+use clap::{Arg, Command};
+
+// --color         → uses default_missing_value "always"
+// --color=never   → uses the supplied "never"
+// (absent)        → uses default_value "auto"
+let cmd = Command::new("prog")
+    .arg(
+        Arg::new("color")
+            .long("color")
+            .num_args(0..=1)
+            .require_equals(true)
+            .default_value("auto")
+            .default_missing_value("always"),
+    );
+```
+
+<Tip>
+  `ArgAction::SetTrue` and `ArgAction::SetFalse` configure their own `default_value` and `default_missing_value` automatically — you rarely need to set them manually for boolean flags.
+</Tip>
+
+---
+
+## Required and Optional Arguments
+
+By default every `Arg` is **optional**. Call `.required(true)` to make it mandatory.
+
+```rust
+use clap::{Arg, Command};
+
+let result = Command::new("prog")
+    .arg(Arg::new("debug").required(true))
+    .try_get_matches_from(vec!["prog"]);
+
+assert_eq!(
+    result.unwrap_err().kind(),
+    clap::error::ErrorKind::MissingRequiredArgument
+);
+```
+
+Conditional required rules are covered in the [Validation guide](/concepts/validation); they include `required_if_eq`, `required_unless_present`, and friends.
+
+---
+
+## ValueHint for Shell Completions
+
+`ValueHint` tells shell completion generators what kind of value an argument expects. It does not affect parsing — only completion scripts.
+
+```rust
+use clap::{Arg, ArgAction, ValueHint, command};
+
+let cmd = command!()
+    .arg(
+        Arg::new("output")
+            .short('o')
+            .long("output")
+            .action(ArgAction::Set)
+            .value_hint(ValueHint::FilePath),
+    );
+```
+
+<CardGroup cols={2}>
+  <Card title="AnyPath" icon="folder-open">
+    Any existing filesystem path (file or directory).
+  </Card>
+  <Card title="FilePath" icon="file">
+    Path to a file specifically.
+  </Card>
+  <Card title="DirPath" icon="folder">
+    Path to a directory.
+  </Card>
+  <Card title="ExecutablePath" icon="terminal">
+    Path to an executable binary.
+  </Card>
+  <Card title="CommandName" icon="square-terminal">
+    A command name, possibly resolved from `PATH`.
+  </Card>
+  <Card title="Username" icon="user">
+    An OS username (parsed from `/etc/passwd` on Unix).
+  </Card>
+  <Card title="Hostname" icon="server">
+    A hostname (parsed from `/etc/hosts` or known hosts).
+  </Card>
+  <Card title="Url" icon="link">
+    A full web address.
+  </Card>
+</CardGroup>
+
+<Note>
+  Support varies by shell. `FilePath`, `DirPath`, and `AnyPath` work in both zsh and fish. `CommandWithArguments` requires `num_args(1..)` and `Command::trailing_var_arg(true)`.
+</Note>

@@ -1,0 +1,150 @@
+---
+title: "Installing clap in Your Rust Project: A Full Guide"
+sidebarTitle: "Installation"
+description: "Add clap to your Rust project using cargo add or Cargo.toml, choose the right feature flags, and understand no_std support and MSRV requirements."
+---
+
+Adding clap to a Rust project takes a single command. The only decision you need to make upfront is which feature flags to enable — in particular, whether you want the derive API (the recommended choice for most projects) or the builder API alone.
+
+## Quick Install
+
+<CodeGroup>
+  ```bash cargo add (derive API)
+  cargo add clap --features derive
+  ```
+
+  ```bash cargo add (builder API only)
+  cargo add clap
+  ```
+</CodeGroup>
+
+`cargo add` appends the dependency to your `Cargo.toml` automatically and resolves the latest compatible version.
+
+## Editing Cargo.toml Directly
+
+If you prefer to pin a specific version or need a custom feature set, edit `Cargo.toml` by hand:
+
+<CodeGroup>
+  ```toml Derive API (recommended)
+  [dependencies]
+  clap = { version = "4", features = ["derive"] }
+  ```
+
+  ```toml Builder API only
+  [dependencies]
+  clap = "4"
+  ```
+
+  ```toml All commonly useful features
+  [dependencies]
+  clap = { version = "4", features = ["derive", "env", "wrap_help", "unicode"] }
+  ```
+
+  ```toml Minimal build (no default features)
+  [dependencies]
+  clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
+  ```
+</CodeGroup>
+
+<Tip>
+  Prefer `version = "4"` over an exact version like `"4.6.7"` so you receive patch releases automatically. Use `cargo update` whenever you want to pull in the latest fixes.
+</Tip>
+
+## Feature Flags Reference
+
+clap uses Cargo feature flags to keep the default binary footprint reasonable. You opt in to anything beyond the core set.
+
+### Default Features
+
+These are enabled automatically unless you set `default-features = false`:
+
+| Feature | What it does |
+|---|---|
+| `std` | Placeholder for `no_std` forward-compatibility. Not currently required for any functionality. |
+| `color` | Terminal colouring for help text and error messages. Customise with `Command::styles`. |
+| `help` | Auto-generate `--help` output. |
+| `usage` | Auto-generate the `Usage:` line in help and errors. |
+| `error-context` | Include contextual details in error messages (which argument failed, what value was provided, etc.). |
+| `suggestions` | Show `Did you mean '--flag'?` suggestions for unrecognised arguments. |
+
+### Optional Features
+
+Enable these explicitly in `Cargo.toml`:
+
+| Feature | Cargo flag | What it does |
+|---|---|---|
+| Derive macros | `derive` | Enables `#[derive(Parser)]`, `#[derive(Args)]`, `#[derive(Subcommand)]`, and `#[derive(ValueEnum)]`. Required for the derive API. |
+| Cargo env macros | `cargo` | Activates macros that read `CARGO_*` environment variables (e.g. `command!()`, `crate_version!()`). Disable if you are not building with Cargo. |
+| Env variable fallback | `env` | Lets arguments fall back to an environment variable when not supplied on the command line. |
+| Unicode | `unicode` | Full unicode support in argument values and help text, including emoji. |
+| Help wrapping | `wrap_help` | Wraps long help strings at the current terminal width using `textwrap`. |
+| Runtime strings | `string` | Allows dynamically generated strings via `clap::builder::Str`. |
+| Deprecation hints | `deprecated` | Opt-in guided migration warnings to help prepare for the next major release. |
+
+<Note>
+  The `cargo` feature is separate from the `derive` feature. If you use `command!()` (which reads `CARGO_PKG_*` env vars at compile time) you need `cargo`. If you only want `#[derive(Parser)]`, you only need `derive`.
+</Note>
+
+### Experimental Features
+
+<Warning>
+  The features below may include breaking changes between minor releases. Do not use them in production libraries.
+</Warning>
+
+| Feature | Notes |
+|---|---|
+| `unstable-v5` | Preview of changes planned for clap v5. Enables `deprecated` to guide migration. |
+| `unstable-ext` | Experimental extension points. |
+
+## Verifying the Installation
+
+After adding clap, confirm everything compiles with a minimal `main.rs`:
+
+```rust
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Args {}
+
+fn main() {
+    let _args = Args::parse();
+}
+```
+
+```bash
+cargo run -- --help
+```
+
+You should see a generated help message with `--help` and `--version` flags. If you see a compile error about the `derive` feature not being enabled, add `features = ["derive"]` to your `Cargo.toml` entry.
+
+## Minimum Supported Rust Version (MSRV)
+
+clap 4.x requires **Rust 1.85** or newer. This matches the `rust-version` field in the workspace `Cargo.toml`.
+
+```toml
+# Check your current Rust version
+[toolchain]
+channel = "stable"   # 1.85+ required
+```
+
+Run `rustup update stable` if your toolchain is older.
+
+<Tip>
+  If you are maintaining a library crate with a lower MSRV, pin clap to a specific minor version (e.g. `"4.4"`) and test against your declared MSRV in CI.
+</Tip>
+
+## no_std Considerations
+
+clap's `std` feature is currently a placeholder reserved for a future `no_std`-compatible API surface. At present, **clap requires the Rust standard library** and cannot be used in `#![no_std]` environments.
+
+If you need argument parsing without `std`, consider [`lexopt`](https://crates.io/crates/lexopt) or hand-rolling minimal parsing over `std::env::args_os`.
+
+## Build-Time Impact
+
+clap with the derive feature uses procedural macros, which increases incremental compile times compared to the builder-only path. A few strategies to keep compile times manageable:
+
+- **Enable only the features you need.** Each optional feature adds code.
+- **Use the builder API** in deeply layered library crates to avoid proc-macro overhead.
+- **Share a workspace `[dependencies]`** entry across crates in a Cargo workspace so clap is compiled once.
+- **Profile with `cargo build --timings`** to confirm clap is actually the bottleneck before optimising.

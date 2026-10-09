@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "clap",
+  "projectType": "sdk-library",
+  "projectName": "clap",
+  "projectDescription": "A full-featured, fast command-line argument parser for Rust that supports both a derive macro API and a builder API.",
   "theme": "luma",
-  "colors": {
-    "primary": "#83a3d3",
-    "light": "#9fb9e7",
-    "dark": "#0c2c64"
-  },
-  "favicon": "https://media.brand.dev/c94493d3-42c0-4eae-9122-7f571ae1dac5.png",
-  "logo": {
-    "light": "https://media.brand.dev/b7b869b1-b35c-4502-b224-73dd56af0067.svg",
-    "dark": "https://media.brand.dev/b7b869b1-b35c-4502-b224-73dd56af0067.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/clap-rs/clap"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/clap-rs/clap"
-    }
-  },
+  "primaryColor": "#83a3d3",
+  "lightColor": "#9fb9e7",
+  "darkColor": "#0c2c64",
   "navigation": {
     "tabs": [
       {
@@ -106,5 +89,40 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Two ergonomic APIs: derive macros (#[derive(Parser)]) and a builder pattern",
+    "Auto-generated help and version output with shell-aware color",
+    "Shell completion generation for bash, zsh, fish, elvish, and PowerShell via clap_complete",
+    "Man page generation via clap_mangen",
+    "Rich argument types: positional, options, flags, subcommands, and value enums",
+    "Custom value parsers and validators with strong type inference",
+    "Argument groups, conflicts, requirements, and dependency relations",
+    "Environment variable fallback for argument values",
+    "Multicall binary support (e.g., busybox-style binaries)",
+    "Typo suggestion ('Did you mean?') for user errors",
+    "Unicode, terminal-width help wrapping, and styled output"
+  ],
+  "publicApiSurface": [
+    "clap::Command",
+    "clap::Arg",
+    "clap::ArgGroup",
+    "clap::ArgMatches",
+    "clap::ArgAction",
+    "clap::ValueHint",
+    "clap::Parser (derive)",
+    "clap::Args (derive)",
+    "clap::Subcommand (derive)",
+    "clap::ValueEnum (derive)",
+    "clap::builder::ValueParser",
+    "clap::builder::TypedValueParser",
+    "clap::builder::PossibleValue",
+    "clap::builder::Styles",
+    "clap::error::Error",
+    "clap::error::ErrorKind",
+    "clap_complete::aot::Shell",
+    "clap_complete::aot::generate",
+    "clap_complete::aot::generate_to",
+    "clap_mangen::Man"
+  ]
 }

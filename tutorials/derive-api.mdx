@@ -1,0 +1,539 @@
+---
+title: "Derive API Tutorial: Declarative CLI Parsing in Rust"
+sidebarTitle: "Derive API"
+description: "Learn to build fully-featured Rust command-line apps using clap's derive API — structs, enums, subcommands, validation, and argument relations."
+---
+
+The derive API lets you define your CLI entirely in Rust types. You annotate a `struct` (or `enum`) with `#[derive(Parser)]` and clap generates the argument-parsing logic at compile time. The result is a strongly typed, zero-boilerplate interface: once `Cli::parse()` returns, every field is already validated and converted to the right Rust type.
+
+<Note>
+  The derive API requires the `derive` feature flag. Add it to your project with:
+
+  ```console
+  $ cargo add clap --features derive
+  ```
+</Note>
+
+## Quick Start
+
+<Steps>
+  <Step title="Define your CLI struct">
+    Annotate a struct with `#[derive(Parser)]` and add `#[command(version, about)]` to pull metadata from `Cargo.toml`. Each field becomes an argument — positional by default, named when you add `#[arg(short)]` or `#[arg(long)]`.
+
+    ```rust
+    use std::path::PathBuf;
+
+    use clap::{Parser, Subcommand};
+
+    #[derive(Parser)]
+    #[command(version, about, long_about = None)]
+    struct Cli {
+        /// Optional name to operate on
+        name: Option<String>,
+
+        /// Sets a custom config file
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Turn debugging information on
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        debug: u8,
+
+        #[command(subcommand)]
+        command: Option<Commands>,
+    }
+
+    #[derive(Subcommand)]
+    enum Commands {
+        /// does testing things
+        Test {
+            /// lists test values
+            #[arg(short, long)]
+            list: bool,
+        },
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+
+        // You can check the value provided by positional arguments, or option arguments
+        if let Some(name) = cli.name.as_deref() {
+            println!("Value for name: {name}");
+        }
+
+        if let Some(config_path) = cli.config.as_deref() {
+            println!("Value for config: {}", config_path.display());
+        }
+
+        // You can see how many times a particular flag or argument occurred
+        // Note, only flags can have multiple occurrences
+        match cli.debug {
+            0 => println!("Debug mode is off"),
+            1 => println!("Debug mode is kind of on"),
+            2 => println!("Debug mode is on"),
+            _ => println!("Don't be crazy"),
+        }
+
+        // You can check for the existence of subcommands, and if found use their
+        // matches just as you would the top level cmd
+        match &cli.command {
+            Some(Commands::Test { list }) => {
+                if *list {
+                    println!("Printing testing lists...");
+                } else {
+                    println!("Not printing testing lists...");
+                }
+            }
+            None => {}
+        }
+
+        // Continued program logic goes here...
+    }
+    ```
+  </Step>
+
+  <Step title="Call parse() in main">
+    `Cli::parse()` reads `std::env::args_os()`, validates every argument, and returns a fully populated `Cli` instance — or prints an error and exits automatically if something is wrong. There is no `Result` to unwrap for normal usage.
+  </Step>
+</Steps>
+
+---
+
+## Configuring the Parser
+
+You can set the application's name, version, and description directly with `#[command(...)]` attributes on your struct.
+
+<Tabs>
+  <Tab title="Manual metadata">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    #[command(name = "MyApp")]
+    #[command(version = "1.0")]
+    #[command(about = "Does awesome things", long_about = None)]
+    struct Cli {
+        #[arg(long)]
+        two: String,
+        #[arg(long)]
+        one: String,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+
+        println!("two: {:?}", cli.two);
+        println!("one: {:?}", cli.one);
+    }
+    ```
+  </Tab>
+
+  <Tab title="Read from Cargo.toml">
+    Pass bare `version` and `about` (without a `= "..."` value) to read them directly from your `Cargo.toml`:
+
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    #[command(version, about, long_about = None)] // Read from `Cargo.toml`
+    struct Cli {
+        #[arg(long)]
+        two: String,
+        #[arg(long)]
+        one: String,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+
+        println!("two: {:?}", cli.two);
+        println!("one: {:?}", cli.one);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+  Any [`Command`](https://docs.rs/clap/latest/clap/struct.Command.html) builder method can be used as a `#[command(...)]` attribute on your struct — for example `#[command(next_line_help = true)]` to put help text on the next line after each flag.
+</Tip>
+
+---
+
+## Argument Types
+
+### Positional Arguments
+
+By default, a struct field with no `#[arg(short)]` or `#[arg(long)]` annotation becomes a positional argument. The user supplies its value by position, not by name.
+
+```rust
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    name: String,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    println!("name: {:?}", cli.name);
+}
+```
+
+Running `myapp Alice` sets `cli.name` to `"Alice"`.
+
+### Options (`--name <VALUE>`)
+
+Named options are created by adding `#[arg(short)]`, `#[arg(long)]`, or both. When you write `#[arg(short)]` or `#[arg(long)]` without a value, the flag name is inferred from the field name.
+
+```rust
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long)]
+    name: String,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    println!("name: {:?}", cli.name);
+}
+```
+
+This accepts both `-n Alice` and `--name Alice`.
+
+### Flags (`--verbose`)
+
+A `bool` field with `#[arg(short)]` or `#[arg(long)]` becomes a boolean flag. Its default `ArgAction` is `SetTrue`, so the field is `false` when the flag is absent and `true` when it is present.
+
+```rust
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    println!("verbose: {:?}", cli.verbose);
+}
+```
+
+### Optional Arguments
+
+Wrapping a field's type in `Option<T>` makes it optional. The value is `None` when the user does not supply it.
+
+```rust
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long)]
+    name: String,       // required — the program exits with an error if omitted
+
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<std::path::PathBuf>,  // optional — None if not provided
+}
+```
+
+### Default Values
+
+Use `#[arg(default_value_t = <expr>)]` to supply a default for an argument when the user does not provide one. The type must implement `Display`.
+
+```rust
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(default_value_t = 2020)]
+    port: u16,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    println!("port: {:?}", cli.port);
+}
+```
+
+Running `myapp` uses port `2020`. Running `myapp 8080` uses port `8080`.
+
+### Subcommands
+
+Subcommands are modelled as a `#[derive(Subcommand)]` enum whose variants each represent one subcommand. Connect it to the top-level struct with `#[command(subcommand)]` on a field.
+
+```rust
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+#[command(propagate_version = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Adds files to myapp
+    Add { name: Option<String> },
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    // You can check for the existence of subcommands, and if found use their
+    // matches just as you would the top level cmd
+    match &cli.command {
+        Commands::Add { name } => {
+            println!("'myapp add' was used, name is: {name:?}");
+        }
+    }
+}
+```
+
+Each enum variant can carry its own fields (the subcommand's arguments), its own `#[command(...)]` attributes, and even nested `#[command(subcommand)]` fields.
+
+<Note>
+  Wrapping the subcommand field in `Option<Commands>` makes subcommands optional. Use `Commands` (non-optional) to require the user to always specify a subcommand.
+</Note>
+
+---
+
+## Validation
+
+### Value Enums
+
+When an argument must be one of a fixed set of values, derive `ValueEnum` on an enum and mark the field with `#[arg(value_enum)]`. clap generates the allowed-value list automatically, validates input, and converts the string into your enum variant.
+
+```rust
+use clap::{Parser, ValueEnum};
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// What mode to run the program in
+    #[arg(value_enum)]
+    mode: Mode,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum Mode {
+    /// Run swiftly
+    Fast,
+    /// Crawl slowly but steadily
+    ///
+    /// This paragraph is ignored because there is no long help text for possible values.
+    Slow,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    match cli.mode {
+        Mode::Fast => {
+            println!("Hare");
+        }
+        Mode::Slow => {
+            println!("Tortoise");
+        }
+    }
+}
+```
+
+If the user passes an invalid value they receive a clear error listing the accepted options.
+
+### Custom Parsing with `value_parser`
+
+For richer validation — such as restricting a number to a range — use `#[arg(value_parser = ...)]` with clap's built-in `value_parser!` macro.
+
+```rust
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Network port to use
+    #[arg(value_parser = clap::value_parser!(u16).range(1..))]
+    port: u16,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    println!("PORT = {}", cli.port);
+}
+```
+
+`value_parser!(u16).range(1..)` rejects `0` and any value above `65535` before your `main` function body is ever reached.
+
+<Tip>
+  `value_parser!` works with any type that implements `FromStr`. You can also supply a closure or implement `TypedValueParser` for fully custom validation logic with tailored error messages.
+</Tip>
+
+---
+
+## Argument Relations
+
+Real CLIs often have rules like "these two flags are mutually exclusive" or "this option requires that option". Clap models these with `requires`, `conflicts_with`, and `ArgGroup`.
+
+Use `#[derive(Args)]` on a plain struct to define a reusable set of arguments, then embed it in your main parser with `#[command(flatten)]`. Applying `#[group(...)]` to the inner struct creates an `ArgGroup` automatically.
+
+```rust
+use clap::{Args, Parser};
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[command(flatten)]
+    vers: Vers,
+
+    /// some regular input
+    #[arg(group = "input")]
+    input_file: Option<String>,
+
+    /// some special input argument
+    #[arg(long, group = "input")]
+    spec_in: Option<String>,
+
+    #[arg(short, requires = "input")]
+    config: Option<String>,
+}
+
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+struct Vers {
+    /// set version manually
+    #[arg(long, value_name = "VER")]
+    set_ver: Option<String>,
+
+    /// auto inc major
+    #[arg(long)]
+    major: bool,
+
+    /// auto inc minor
+    #[arg(long)]
+    minor: bool,
+
+    /// auto inc patch
+    #[arg(long)]
+    patch: bool,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    // Let's assume the old version 1.2.3
+    let mut major = 1;
+    let mut minor = 2;
+    let mut patch = 3;
+
+    // See if --set_ver was used to set the version manually
+    let vers = &cli.vers;
+    let version = if let Some(ver) = vers.set_ver.as_deref() {
+        ver.to_owned()
+    } else {
+        // Increment the one requested (in a real program, we'd reset the lower numbers)
+        let (maj, min, pat) = (vers.major, vers.minor, vers.patch);
+        match (maj, min, pat) {
+            (true, _, _) => major += 1,
+            (_, true, _) => minor += 1,
+            (_, _, true) => patch += 1,
+            _ => unreachable!(),
+        };
+        format!("{major}.{minor}.{patch}")
+    };
+
+    println!("Version: {version}");
+
+    // Check for usage of -c
+    if let Some(config) = cli.config.as_deref() {
+        let input = cli
+            .input_file
+            .as_deref()
+            .unwrap_or_else(|| cli.spec_in.as_deref().unwrap());
+        println!("Doing work using input {input} and config {config}");
+    }
+}
+```
+
+What the relations above enforce at parse time:
+
+| Rule | Effect |
+|------|--------|
+| `#[group(required = true, multiple = false)]` on `Vers` | Exactly one of `--set-ver`, `--major`, `--minor`, `--patch` must be passed |
+| `#[arg(group = "input")]` on two fields | Both fields belong to the `"input"` group |
+| `#[arg(short, requires = "input")]` on `config` | `-c` can only be used when an `"input"` argument is also present |
+
+---
+
+## Reusing Argument Sets with `#[derive(Args)]`
+
+`#[derive(Args)]` lets you define a group of arguments in a separate struct and then reuse it across multiple commands with `#[command(flatten)]`.
+
+```rust
+use clap::{Args, Parser, Subcommand};
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Build(BuildArgs),
+    Check(BuildArgs),  // reuses the same argument set
+}
+
+#[derive(Args)]
+struct BuildArgs {
+    /// Enable release mode
+    #[arg(long)]
+    release: bool,
+
+    /// Target triple
+    #[arg(long)]
+    target: Option<String>,
+}
+```
+
+<Note>
+  `#[command(flatten)]` merges another `Args`-derived struct directly into the current struct's argument list. The flattened arguments appear as if they were defined inline — they show up in help output at the same level and follow the same ordering rules.
+</Note>
+
+---
+
+## Testing Your Parser
+
+clap catches most misconfiguration bugs at runtime via `debug_assert!`. Add a test that calls `Command::debug_assert` so these fire during `cargo test` rather than in production:
+
+```rust
+#[test]
+fn verify_cli() {
+    use clap::CommandFactory;
+    Cli::command().debug_assert();
+}
+```
+
+<Tip>
+  Run `cargo test` with the `RUST_BACKTRACE=1` environment variable to get a full backtrace on any assertion failures inside clap's debug checks.
+</Tip>
+
+---
+
+## Next Steps
+
+- **Builder API** — if you need runtime-dynamic argument definitions, see the [Builder API tutorial](/tutorials/builder-api).
+- **Cookbook** — browse the [cookbook](/guides/cookbook) for complete application-focused examples.
+- **Derive reference** — see the full list of `#[command(...)]`, `#[arg(...)]`, and `#[value(...)]` attributes in the [derive reference](/reference/derive-reference).

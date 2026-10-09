@@ -1,0 +1,207 @@
+---
+title: "clap::ArgGroup — Argument Group Reference"
+sidebarTitle: "ArgGroup"
+description: "Complete reference for clap::ArgGroup in Rust. Group related arguments for mutual exclusivity, shared requirements, and conflict validation in CLI apps."
+---
+
+`ArgGroup` lets you apply validation rules to a named collection of arguments rather than configuring each argument individually. The most common use case is expressing "exactly one of these flags must be present" — for example, a version bumping tool that accepts `--major`, `--minor`, `--patch`, or `--set-ver` but must receive exactly one of them. Groups can also model requirement and conflict relationships at the group level, and they expose a group-level ID so you can query which member of the group was used via `ArgMatches::get_one::<Id>("group_name")`.
+
+Groups are distinct from visual help groupings: for organizing arguments under headings in help output, use `Arg::help_heading()` instead.
+
+---
+
+## Construction
+
+<ParamField path="ArgGroup::new" type="fn(id: impl Into<Id>) -> Self">
+  Creates a new `ArgGroup` with the given unique name. The name serves as the key when querying which member of the group was provided via `ArgMatches`, and it can also be used as the target of `requires` and `conflicts_with` rules on individual `Arg`s and other groups.
+
+  ```rust
+  use clap::ArgGroup;
+
+  let group = ArgGroup::new("version-bump");
+  ```
+</ParamField>
+
+---
+
+## Membership
+
+<ParamField path="args" type="fn(self, ns: impl IntoIterator<Item = impl Into<Id>>) -> Self">
+  Adds multiple argument IDs to the group in one call. Each ID must match the string passed to `Arg::new()` when that argument was constructed. Arguments can be added to multiple groups.
+
+  ```rust
+  use clap::{Command, Arg, ArgGroup, ArgAction};
+
+  let m = Command::new("prog")
+      .arg(Arg::new("flag").short('f').action(ArgAction::SetTrue))
+      .arg(Arg::new("color").short('c').action(ArgAction::SetTrue))
+      .group(ArgGroup::new("ui-opts").args(["flag", "color"]))
+      .get_matches_from(["prog", "-f"]);
+
+  // The group ID matches when any member was used
+  assert!(m.contains_id("ui-opts"));
+  assert!(m.contains_id("flag"));
+  ```
+</ParamField>
+
+---
+
+## Validation Rules
+
+<ParamField path="required" type="fn(self, yes: bool) -> Self">
+  When `true`, at least one member of the group must be present. By default `multiple` is `false`, which means exactly one member is allowed — combining `required(true)` with the default `multiple(false)` produces strict mutual exclusivity: the user must supply exactly one argument from the group.
+
+  Changing to `required(true)` + `multiple(true)` means "at least one, but more are allowed."
+
+  ```rust
+  use clap::{Command, arg, ArgGroup, error::ErrorKind};
+
+  // Exactly one version bump flag is required
+  let result = Command::new("bump")
+      .arg(arg!(--major "Bump major"))
+      .arg(arg!(--minor "Bump minor"))
+      .arg(arg!(--patch "Bump patch"))
+      .group(
+          ArgGroup::new("vers")
+              .args(["major", "minor", "patch"])
+              .required(true),
+      )
+      .try_get_matches_from(["bump"]); // no args → error
+
+  assert!(result.is_err());
+  assert_eq!(result.unwrap_err().kind(), ErrorKind::MissingRequiredArgument);
+  ```
+</ParamField>
+
+<ParamField path="multiple" type="fn(self, yes: bool) -> Self">
+  When `true`, more than one member of the group may be supplied at runtime. The default is `false`, meaning only one member is permitted; using a second member produces an `ArgumentConflict` error.
+
+  ```rust
+  use clap::{Command, Arg, ArgGroup, ArgAction};
+
+  // Both -f and -c are allowed simultaneously
+  let m = Command::new("prog")
+      .arg(Arg::new("flag").short('f').action(ArgAction::SetTrue))
+      .arg(Arg::new("color").short('c').action(ArgAction::SetTrue))
+      .group(
+          ArgGroup::new("opts")
+              .args(["flag", "color"])
+              .multiple(true),
+      )
+      .get_matches_from(["prog", "-f", "-c"]);
+
+  assert!(m.contains_id("opts"));
+  assert!(m.get_flag("flag"));
+  assert!(m.get_flag("color"));
+  ```
+</ParamField>
+
+---
+
+## Inter-group Relations
+
+<ParamField path="requires" type="fn(self, id: impl IntoResettable<Id>) -> Self">
+  When any member of this group is used, the named argument or group must also be present. This mirrors `Arg::requires()` but applies the constraint at the group level.
+
+  ```rust
+  use clap::{Command, Arg, ArgGroup, ArgAction, error::ErrorKind};
+
+  // Using -f or -c requires -d to also be present
+  let result = Command::new("prog")
+      .arg(Arg::new("flag").short('f').action(ArgAction::SetTrue))
+      .arg(Arg::new("color").short('c').action(ArgAction::SetTrue))
+      .arg(Arg::new("debug").short('d').action(ArgAction::SetTrue))
+      .group(
+          ArgGroup::new("ui")
+              .args(["flag", "color"])
+              .requires("debug"),
+      )
+      .try_get_matches_from(["prog", "-c"]); // -d missing
+
+  assert!(result.is_err());
+  assert_eq!(result.unwrap_err().kind(), ErrorKind::MissingRequiredArgument);
+  ```
+</ParamField>
+
+<ParamField path="conflicts_with" type="fn(self, id: impl IntoResettable<Id>) -> Self">
+  When any member of this group is used, the named argument or group must **not** be present. Mirrors `Arg::conflicts_with()` but operates at the group level, avoiding repetitive per-argument conflict declarations.
+
+  ```rust
+  use clap::{Command, Arg, ArgGroup, ArgAction, error::ErrorKind};
+
+  // Using -f or -c conflicts with -d
+  let result = Command::new("prog")
+      .arg(Arg::new("flag").short('f').action(ArgAction::SetTrue))
+      .arg(Arg::new("color").short('c').action(ArgAction::SetTrue))
+      .arg(Arg::new("debug").short('d').action(ArgAction::SetTrue))
+      .group(
+          ArgGroup::new("ui")
+              .args(["flag", "color"])
+              .conflicts_with("debug"),
+      )
+      .try_get_matches_from(["prog", "-c", "-d"]);
+
+  assert!(result.is_err());
+  assert_eq!(result.unwrap_err().kind(), ErrorKind::ArgumentConflict);
+  ```
+</ParamField>
+
+---
+
+## Full example
+
+The following shows the canonical version-bumping pattern taken from the official clap examples. The group ensures exactly one version strategy is selected, while a separate optional `--config` argument uses `Arg::requires()` to demand that at least one input source is also provided:
+
+```rust
+use std::path::PathBuf;
+use clap::{ArgAction, ArgGroup, arg, command, value_parser};
+
+fn main() {
+    let matches = command!()
+        // Version strategy flags
+        .arg(arg!(--"set-ver" <VER> "Set version manually"))
+        .arg(arg!(--major "Auto-increment major").action(ArgAction::SetTrue))
+        .arg(arg!(--minor "Auto-increment minor").action(ArgAction::SetTrue))
+        .arg(arg!(--patch "Auto-increment patch").action(ArgAction::SetTrue))
+        // Exactly one version strategy must be chosen
+        .group(
+            ArgGroup::new("vers")
+                .required(true)
+                .args(["set-ver", "major", "minor", "patch"]),
+        )
+        // Input source flags (not required, but -c requires one of them)
+        .arg(
+            arg!([INPUT_FILE] "Input file")
+                .value_parser(value_parser!(PathBuf))
+                .group("input"),
+        )
+        .arg(
+            arg!(--"spec-in" <SPEC_IN> "Special input")
+                .value_parser(value_parser!(PathBuf))
+                .group("input"),
+        )
+        .arg(
+            arg!(config: -c <CONFIG> "Config file")
+                .value_parser(value_parser!(PathBuf))
+                .requires("input"),
+        )
+        .get_matches();
+
+    // Determine new version
+    let version = if let Some(ver) = matches.get_one::<String>("set-ver") {
+        ver.clone()
+    } else {
+        let bump = if matches.get_flag("major") { "major" }
+            else if matches.get_flag("minor") { "minor" }
+            else { "patch" };
+        format!("bumped-{bump}")
+    };
+    println!("Version: {version}");
+
+    if matches.contains_id("config") {
+        println!("Using config: {:?}", matches.get_one::<PathBuf>("config"));
+    }
+}
+```
+
+Running this binary with no arguments, or with two version flags simultaneously, will produce a descriptive error and non-zero exit code automatically.

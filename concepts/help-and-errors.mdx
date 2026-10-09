@@ -1,0 +1,343 @@
+---
+title: "Help, Version Output, and Error Handling in clap 4"
+sidebarTitle: "Help & Errors"
+description: "Customise clap 4 help text, understand ErrorKind variants, display or exit on errors with error.print() and error.exit(), and control ColorChoice."
+---
+
+Clap 4 automatically generates help and version output from the metadata you attach to your `Command` and `Arg` definitions — no manual formatting code required. When the user passes `-h` or `--help`, clap renders a structured usage block, a list of options, and any custom prose you provide. Errors detected during parsing are similarly formatted with context and a usage snippet. This guide explains how to customise that auto-generated content, the full set of `ErrorKind` variants you may encounter, how to surface or suppress errors at runtime, and how to control colour output.
+
+---
+
+## Auto-Generated Help
+
+Clap adds `-h`/`--help` to every command by default. `-h` prints a compact summary; `--help` prints the long form (using `long_about` and `after_long_help` if provided, otherwise the same text as `-h`).
+
+```rust
+use clap::{Command, Arg};
+
+Command::new("My Program")
+    .author("Me, me@mail.com")
+    .version("1.0.2")
+    .about("Explains in brief what the program does")
+    .arg(Arg::new("in_file"))
+    .after_help(
+        "Longer explanation to appear after the options when \
+         displaying the help information from --help or -h",
+    )
+    .get_matches();
+```
+
+Running `my_program --help` produces output roughly like:
+
+```text
+my_program 1.0.2
+Me, me@mail.com
+Explains in brief what the program does
+
+Usage: my_program [in_file]
+
+Arguments:
+  [in_file]
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+Longer explanation to appear after the options when displaying the help
+information from --help or -h
+```
+
+---
+
+## Customising Help Text
+
+<Steps>
+  <Step title="about and long_about">
+    `about` is shown in both `-h` and `--help`. `long_about` replaces `about` in the `--help` output only, giving you space for a multi-paragraph description.
+
+    ```rust
+    use clap::Command;
+
+    Command::new("myprog")
+        .about("Does really amazing things for great people")
+        .long_about(
+            "Does really amazing things to great people. Now let's talk a little \
+             more in depth about how this subcommand really works. It may take about \
+             a few lines of text, but that's ok!"
+        )
+    # ;
+    ```
+  </Step>
+  <Step title="before_help and before_long_help">
+    Free-form text shown *before* the auto-generated content. Useful for copyright notices or preambles.
+
+    ```rust
+    use clap::Command;
+
+    Command::new("myprog")
+        .before_help("Some info I'd like to appear before the help info")
+        .before_long_help(
+            "Some verbose and long info I'd like to appear before the help info"
+        )
+    # ;
+    ```
+
+    If `before_long_help` is not set, `before_help` is used for both `-h` and `--help`.
+  </Step>
+  <Step title="after_help and after_long_help">
+    Free-form text shown *after* the auto-generated options. Often used for examples, caveats, or licence information.
+
+    ```rust
+    use clap::Command;
+
+    Command::new("myprog")
+        .after_help(
+            "Does really amazing things for great people... but be careful with -R!"
+        )
+        .after_long_help(
+            "Does really amazing things to great people... but be careful with -R, \
+             like, for real, be careful with this!"
+        )
+    # ;
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Use `Arg::help("…")` for the short one-liner shown next to each flag, and `Arg::long_help("…")` for the expanded description shown only in `--help` output.
+</Tip>
+
+---
+
+## Version Output
+
+Set `.version("…")` to enable `-V`/`--version`. Use `.long_version("…")` for a richer multi-line string shown with `--version`.
+
+```rust
+use clap::Command;
+
+Command::new("myprog")
+    .version("v0.1.24")
+# ;
+```
+
+```rust
+use clap::Command;
+
+Command::new("myprog")
+    .long_version(
+"v0.1.24
+ commit: abcdef89726d
+ revision: 123
+ release: 2
+ binary: myprog"
+    )
+# ;
+```
+
+<Note>
+  The `crate_version!` macro sets the version to whatever appears in your `Cargo.toml` at compile time, keeping the two in sync automatically.
+</Note>
+
+You can also bind a custom trigger to display version information:
+
+```rust
+use clap::{Arg, ArgAction, Command};
+
+let cmd = Command::new("mycmd")
+    .version("1.0.0")
+    .arg(
+        Arg::new("special-version")
+            .long("special-version")
+            .action(ArgAction::Version)
+    );
+
+let err = cmd.clone().try_get_matches_from(["mycmd", "--version"]).unwrap_err();
+assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+
+let err = cmd.try_get_matches_from(["mycmd", "--special-version"]).unwrap_err();
+assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+```
+
+---
+
+## ErrorKind Variants
+
+Every parsing failure is represented as a `clap::error::ErrorKind`. The full set is:
+
+<CardGroup cols={2}>
+  <Card title="InvalidValue" icon="circle-xmark">
+    The user supplied a value not in the allowed set (`value_parser([…])`).
+  </Card>
+  <Card title="UnknownArgument" icon="circle-question">
+    An unrecognised flag, option, or argument was passed.
+  </Card>
+  <Card title="InvalidSubcommand" icon="triangle-exclamation">
+    An unrecognised subcommand that is similar enough to an existing one (requires the `suggestions` feature).
+  </Card>
+  <Card title="NoEquals" icon="equals">
+    The user omitted `=` for an argument where `require_equals(true)` is set.
+  </Card>
+  <Card title="ValueValidation" icon="shield-xmark">
+    A custom `value_parser` rejected the supplied value.
+  </Card>
+  <Card title="TooManyValues" icon="arrow-up">
+    More values were provided than `num_args` allows.
+  </Card>
+  <Card title="TooFewValues" icon="arrow-down">
+    Fewer values were provided than `num_args` requires.
+  </Card>
+  <Card title="WrongNumberOfValues" icon="hashtag">
+    The exact count required by `num_args` or `value_names` was not met.
+  </Card>
+  <Card title="ArgumentConflict" icon="ban">
+    Two arguments that `conflicts_with` each other were both provided.
+  </Card>
+  <Card title="MissingRequiredArgument" icon="circle-exclamation">
+    A required argument (or required group) was not provided.
+  </Card>
+  <Card title="MissingSubcommand" icon="sitemap">
+    A subcommand was required (`subcommand_required(true)`) but not given.
+  </Card>
+  <Card title="InvalidUtf8" icon="font">
+    A value contained invalid UTF-8 bytes (non-Windows platforms only).
+  </Card>
+  <Card title="DisplayHelp" icon="circle-info">
+    Not a true error — `--help` or `-h` was used. The message goes to stdout.
+  </Card>
+  <Card title="DisplayHelpOnMissingArgumentOrSubcommand" icon="circle-info">
+    `arg_required_else_help(true)` triggered because no argument or subcommand was given.
+  </Card>
+  <Card title="DisplayVersion" icon="tag">
+    Not a true error — `--version` or `-V` was used. The message goes to stdout.
+  </Card>
+  <Card title="Io" icon="hard-drive">
+    An I/O error occurred while writing to stdout or stderr.
+  </Card>
+  <Card title="Format" icon="code">
+    A formatting error occurred while rendering output.
+  </Card>
+</CardGroup>
+
+Check the kind on any `clap::Error` with `.kind()`:
+
+```rust
+use clap::{Command, Arg, error::ErrorKind};
+
+let result = Command::new("prog")
+    .arg(Arg::new("speed").value_parser(["fast", "slow"]))
+    .try_get_matches_from(vec!["prog", "other"]);
+
+assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidValue);
+```
+
+---
+
+## Displaying and Exiting on Errors
+
+### `error.exit()`
+
+The most common pattern: print the error and exit with a non-zero status code.
+
+```rust
+let matches = cmd.get_matches_mut();
+// …custom logic…
+if some_problem {
+    cmd.error(
+        clap::error::ErrorKind::ArgumentConflict,
+        "Can only modify one version field",
+    )
+    .exit();
+}
+```
+
+`.exit()` sends the message to stderr and calls `std::process::exit(2)`.
+
+### `error.print()`
+
+If you want to handle the exit yourself, use `.print()` which writes the message to the appropriate stream and returns `io::Result<()>`:
+
+```rust
+if let Err(e) = cmd.try_get_matches() {
+    e.print().expect("writing error to stderr");
+    std::process::exit(e.exit_code());
+}
+```
+
+### `unwrap_or_else` with `error.exit()`
+
+A compact idiom seen throughout the clap examples:
+
+```rust
+let args = Cli::try_parse().unwrap_or_else(|error| error.exit());
+```
+
+---
+
+## Creating Custom Errors with `Command::error`
+
+`Command::error` constructs a fully formatted `clap::Error` — complete with usage context — from any `ErrorKind` and a message string. This is the recommended way to surface application-level validation failures that clap cannot detect automatically.
+
+```rust
+use clap::error::ErrorKind;
+use clap::{ArgAction, arg, command};
+use std::path::PathBuf;
+
+let mut cmd = command!()
+    .arg(arg!([INPUT_FILE] "some regular input").value_parser(clap::value_parser!(PathBuf)))
+    .arg(
+        arg!(--"spec-in" <SPEC_IN> "some special input argument")
+            .value_parser(clap::value_parser!(PathBuf)),
+    )
+    .arg(arg!(config: -c <CONFIG>).value_parser(clap::value_parser!(PathBuf)));
+
+let matches = cmd.get_matches_mut();
+
+if matches.contains_id("config") {
+    let input = matches
+        .get_one::<PathBuf>("INPUT_FILE")
+        .or_else(|| matches.get_one::<PathBuf>("spec-in"))
+        .unwrap_or_else(|| {
+            cmd.error(
+                ErrorKind::MissingRequiredArgument,
+                "INPUT_FILE or --spec-in is required when using --config",
+            )
+            .exit()
+        });
+    println!("Using input: {}", input.display());
+}
+```
+
+You can also create a raw error without a `Command` context using `clap::Error::raw`:
+
+```rust
+return Err(clap::Error::raw(
+    clap::error::ErrorKind::InvalidSubcommand,
+    format!("recursive alias `{}`", expanded[0]),
+));
+```
+
+---
+
+## Coloured Output and `ColorChoice`
+
+Clap uses ANSI colour codes in error messages and help text by default when it detects a TTY. Control this with `Command::color`:
+
+```rust
+use clap::{Command, ColorChoice};
+
+// Always use colour, even when piped
+Command::new("myprog").color(ColorChoice::Always);
+
+// Never use colour
+Command::new("myprog").color(ColorChoice::Never);
+
+// Auto-detect based on whether stdout/stderr is a TTY (default)
+Command::new("myprog").color(ColorChoice::Auto);
+```
+
+<Warning>
+  `ColorChoice::Always` can produce garbled output if the consumer of your program's stdout does not understand ANSI escape codes. Prefer `Auto` unless you have a specific reason to force colour.
+</Warning>
+
+`color` is a global setting — it propagates to all subcommands automatically.

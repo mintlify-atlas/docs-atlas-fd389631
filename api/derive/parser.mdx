@@ -1,0 +1,303 @@
+---
+title: "Parser Derive Trait: Parsing CLI Arguments in Rust"
+sidebarTitle: "Parser"
+description: "Complete reference for clap's Parser derive trait, covering parse, try_parse, parse_from, CommandFactory, and FromArgMatches for Rust CLI apps."
+---
+
+The `Parser` derive trait is clap's primary entry point for building command-line interfaces. Applying `#[derive(Parser)]` to a struct wires together argument parsing, `ArgMatches` extraction, and typed value population in one step — letting you define your entire CLI schema as plain Rust types and call `Cli::parse()` from `main`.
+
+## Overview
+
+`Parser` is a convenience supertrait that combines [`FromArgMatches`](#fromargmatches-trait) and [`CommandFactory`](#commandfactory-trait). When you derive it, clap generates implementations of all three traits automatically. The struct fields become arguments, doc comments become help text, and `#[arg(...)]` / `#[command(...)]` attributes configure every detail.
+
+```rust
+use clap::Parser;
+
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Name of the person to greet
+    #[arg(short, long)]
+    name: String,
+
+    /// Number of times to greet
+    #[arg(short, long, default_value_t = 1)]
+    count: u8,
+}
+
+fn main() {
+    let args = Args::parse();
+
+    for _ in 0..args.count {
+        println!("Hello {}!", args.name);
+    }
+}
+```
+
+---
+
+## Parser Trait Methods
+
+<ParamField path="parse" type="fn() -> Self">
+  Parses arguments from `std::env::args_os()`. Exits the process with an error message on failure. This is the standard entry point for production CLIs.
+
+  ```rust
+  fn parse() -> Self
+  ```
+
+  ```rust
+  let args = Args::parse();
+  ```
+</ParamField>
+
+<ParamField path="try_parse" type="fn() -> Result<Self, Error>">
+  Parses arguments from `std::env::args_os()`, returning `Ok(Self)` on success or `Err(Error)` on failure. Use this when you need to inspect or transform the error before exiting.
+
+  ```rust
+  fn try_parse() -> Result<Self, Error>
+  ```
+
+  ```rust
+  match Args::try_parse() {
+      Ok(args) => { /* use args */ }
+      Err(err) => err.exit(),
+  }
+  ```
+</ParamField>
+
+<ParamField path="parse_from" type="fn(itr: I) -> Self">
+  Parses arguments from an iterator rather than `std::env::args_os()`. Exits on failure. Useful in tests and for processing pre-built argument lists.
+
+  ```rust
+  fn parse_from<I, T>(itr: I) -> Self
+  where
+      I: IntoIterator<Item = T>,
+      T: Into<OsString> + Clone
+  ```
+
+  ```rust
+  let args = Args::parse_from(["myapp", "--name", "Alice", "--count", "3"]);
+  ```
+</ParamField>
+
+<ParamField path="try_parse_from" type="fn(itr: I) -> Result<Self, Error>">
+  Parses arguments from an iterator, returning a `Result`. The fallible counterpart to `parse_from`, allowing error handling without process exit.
+
+  ```rust
+  fn try_parse_from<I, T>(itr: I) -> Result<Self, Error>
+  where
+      I: IntoIterator<Item = T>,
+      T: Into<OsString> + Clone
+  ```
+
+  ```rust
+  let result = Args::try_parse_from(["myapp", "--name", "Alice"]);
+  assert!(result.is_ok());
+  ```
+</ParamField>
+
+<ParamField path="update_from" type="fn(&mut self, itr: I)">
+  Updates an existing `Self` instance from an iterator, exiting on error. Requires all previously-required fields to already be populated. Designed for progressive configuration workflows.
+
+  ```rust
+  fn update_from<I, T>(&mut self, itr: I)
+  where
+      I: IntoIterator<Item = T>,
+      T: Into<OsString> + Clone
+  ```
+</ParamField>
+
+<ParamField path="try_update_from" type="fn(&mut self, itr: I) -> Result<(), Error>">
+  Updates an existing `Self` instance from an iterator, returning a `Result` instead of exiting.
+
+  ```rust
+  fn try_update_from<I, T>(&mut self, itr: I) -> Result<(), Error>
+  where
+      I: IntoIterator<Item = T>,
+      T: Into<OsString> + Clone
+  ```
+</ParamField>
+
+---
+
+## CommandFactory Trait
+
+`CommandFactory` is derived alongside `Parser` and lets you access the underlying `Command` object directly — useful for generating completions, printing help programmatically, or runtime inspection.
+
+<ParamField path="command" type="fn() -> Command">
+  Builds and returns the `Command` that can be used to parse arguments and produce a `Self` value via `FromArgMatches`.
+
+  ```rust
+  fn command() -> Command
+  ```
+
+  ```rust
+  // Generate shell completions by accessing the Command directly
+  let mut cmd = Args::command();
+  cmd.print_help().unwrap();
+  ```
+</ParamField>
+
+<ParamField path="command_for_update" type="fn() -> Command">
+  Builds a `Command` configured for the update flow — paired with `FromArgMatches::update_from_arg_matches_mut`.
+
+  ```rust
+  fn command_for_update() -> Command
+  ```
+</ParamField>
+
+---
+
+## FromArgMatches Trait
+
+`FromArgMatches` converts a raw `ArgMatches` into a concrete `Self`. It is derived automatically with `Parser`, `Args`, and `Subcommand`, but you can implement it manually when mixing the builder and derive APIs.
+
+<ParamField path="from_arg_matches" type="fn(matches: &ArgMatches) -> Result<Self, Error>">
+  Constructs `Self` from a shared reference to `ArgMatches`.
+
+  ```rust
+  fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error>
+  ```
+</ParamField>
+
+<ParamField path="from_arg_matches_mut" type="fn(matches: &mut ArgMatches) -> Result<Self, Error>">
+  Constructs `Self` from a mutable reference to `ArgMatches`, allowing values to be consumed. Defaults to calling `from_arg_matches`.
+
+  ```rust
+  fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, Error>
+  ```
+</ParamField>
+
+<ParamField path="update_from_arg_matches" type="fn(&mut self, matches: &ArgMatches) -> Result<(), Error>">
+  Assigns values from `ArgMatches` to an existing `self`, updating fields in place.
+
+  ```rust
+  fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error>
+  ```
+</ParamField>
+
+<ParamField path="update_from_arg_matches_mut" type="fn(&mut self, matches: &mut ArgMatches) -> Result<(), Error>">
+  Assigns values from a mutable `ArgMatches` to an existing `self`.
+
+  ```rust
+  fn update_from_arg_matches_mut(&mut self, matches: &mut ArgMatches) -> Result<(), Error>
+  ```
+</ParamField>
+
+---
+
+## `#[command(...)]` Attributes
+
+Place `#[command(...)]` on the struct to configure the top-level `Command`. These attributes correspond directly to [`Command`](https://docs.rs/clap/latest/clap/struct.Command.html) builder methods.
+
+| Attribute | Effect |
+|-----------|--------|
+| `version` | Sets the version string (defaults to the crate version when used bare) |
+| `about` | Short description shown with `-h`; defaults to the doc comment summary |
+| `long_about` | Long description shown with `--help` |
+| `author` | Sets the author field (requires a custom `help_template` to display) |
+| `name = "..."` | Overrides the command name (defaults to the package name) |
+| `rename_all = "..."` | Case-conversion for field names: `"kebab-case"` (default), `"snake_case"`, `"camelCase"`, `"PascalCase"`, `"SCREAMING_SNAKE_CASE"`, `"lower"`, `"UPPER"`, `"verbatim"` |
+| `next_help_heading = "..."` | Groups the following arguments under a named heading in help output |
+| `arg_required_else_help = true` | Prints help when no arguments are supplied |
+| `verbatim_doc_comment` | Disables clap's doc-comment pre-processing for this item |
+
+### Doc Comments as Help Text
+
+Doc comments on the struct and its fields are automatically used as help text. A blank line in the doc comment separates the short summary (`-h`) from the long description (`--help`).
+
+```rust
+/// Short description shown with -h
+///
+/// This longer paragraph is only shown with --help.
+#[derive(Parser)]
+struct Cli { /* ... */ }
+```
+
+---
+
+## Complete Example
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    /// Simple program to greet a person
+    #[derive(Parser, Debug)]
+    #[command(version, about, long_about = None)]
+    struct Args {
+        /// Name of the person to greet
+        #[arg(short, long)]
+        name: String,
+
+        /// Number of times to greet
+        #[arg(short, long, default_value_t = 1)]
+        count: u8,
+    }
+
+    fn main() {
+        let args = Args::parse();
+        for _ in 0..args.count {
+            println!("Hello {}!", args.name);
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    fn main() {
+        let matches = Command::new("greet")
+            .version("1.0")
+            .about("Simple program to greet a person")
+            .arg(
+                Arg::new("name")
+                    .short('n')
+                    .long("name")
+                    .required(true)
+                    .help("Name of the person to greet"),
+            )
+            .arg(
+                Arg::new("count")
+                    .short('c')
+                    .long("count")
+                    .default_value("1")
+                    .value_parser(clap::value_parser!(u8))
+                    .help("Number of times to greet"),
+            )
+            .get_matches();
+
+        let name = matches.get_one::<String>("name").unwrap();
+        let count = *matches.get_one::<u8>("count").unwrap();
+
+        for _ in 0..count {
+            println!("Hello {}!", name);
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Testing with `parse_from`
+
+Use `parse_from` or `try_parse_from` to exercise your CLI in unit tests without touching `std::env::args_os()`.
+
+```rust
+#[test]
+fn test_defaults() {
+    let args = Args::parse_from(["myapp", "--name", "Bob"]);
+    assert_eq!(args.name, "Bob");
+    assert_eq!(args.count, 1); // default
+}
+
+#[test]
+fn test_debug_assert() {
+    // Panics in debug builds if the Command configuration is invalid
+    Args::command().debug_assert();
+}
+```

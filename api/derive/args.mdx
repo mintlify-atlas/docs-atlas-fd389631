@@ -1,0 +1,280 @@
+---
+title: "Args Derive Trait: Reusable Argument Group Structs"
+sidebarTitle: "Args"
+description: "Reference for clap's Args derive trait — build reusable argument groups, flatten them into Parser structs, and mix with the builder API via augment_args."
+---
+
+The `Args` trait lets you factor shared arguments into a separate struct and reuse them across multiple commands or parsers. Deriving `Args` on a struct generates the plumbing to register its fields as clap arguments and to extract typed values from `ArgMatches`. You embed the struct into a `Parser` or another `Args` struct using `#[command(flatten)]`, which merges all its arguments as if they had been declared inline.
+
+## Overview
+
+`Args` extends [`FromArgMatches`](/api/derive/parser#fromargmatches-trait), so any `Args` struct can also be extracted directly from an `ArgMatches` returned by the builder API. This makes `Args` the mechanism for sharing argument groups between derive-based and builder-based CLIs.
+
+```rust
+use clap::{Args, Parser};
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    #[command(flatten)]
+    vers: Vers,
+
+    /// Some regular input
+    #[arg(group = "input")]
+    input_file: Option<String>,
+}
+
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+struct Vers {
+    /// Set version manually
+    #[arg(long, value_name = "VER")]
+    set_ver: Option<String>,
+
+    /// Auto-increment major version
+    #[arg(long)]
+    major: bool,
+
+    /// Auto-increment minor version
+    #[arg(long)]
+    minor: bool,
+
+    /// Auto-increment patch version
+    #[arg(long)]
+    patch: bool,
+}
+```
+
+---
+
+## The `Args` Trait
+
+```rust
+pub trait Args: FromArgMatches + Sized {
+    fn group_id() -> Option<crate::Id>;
+    fn augment_args(cmd: Command) -> Command;
+    fn augment_args_for_update(cmd: Command) -> Command;
+}
+```
+
+<ParamField path="group_id" type="fn() -> Option<Id>">
+  Returns the [`ArgGroup::id`](https://docs.rs/clap/latest/clap/struct.ArgGroup.html#method.id) that clap implicitly creates for this `Args` struct. Returns `None` by default; overridden by the derive macro when the struct carries `#[group(...)]` attributes.
+
+  ```rust
+  fn group_id() -> Option<crate::Id>
+  ```
+</ParamField>
+
+<ParamField path="augment_args" type="fn(cmd: Command) -> Command">
+  Appends the arguments defined by `Self` to an existing `Command`. This is the core interoperability method used when mixing derive-defined args into a builder-based command.
+
+  ```rust
+  fn augment_args(cmd: Command) -> Command
+  ```
+
+  ```rust
+  use clap::{Args, Command, FromArgMatches as _, arg};
+
+  #[derive(Args, Debug)]
+  struct DerivedArgs {
+      #[arg(short, long)]
+      derived: bool,
+  }
+
+  let cli = Command::new("CLI").arg(arg!(-b --built).action(clap::ArgAction::SetTrue));
+  // Merge DerivedArgs fields into the builder command
+  let cli = DerivedArgs::augment_args(cli);
+
+  let matches = cli.get_matches();
+  let derived = DerivedArgs::from_arg_matches(&matches)
+      .map_err(|err| err.exit())
+      .unwrap();
+  ```
+</ParamField>
+
+<ParamField path="augment_args_for_update" type="fn(cmd: Command) -> Command">
+  Like `augment_args`, but produces a `Command` suited for the update flow where required fields may already have values from a prior parse.
+
+  ```rust
+  fn augment_args_for_update(cmd: Command) -> Command
+  ```
+</ParamField>
+
+---
+
+## `#[command(flatten)]`
+
+When a field of an `Args` or `Parser` struct is annotated with `#[command(flatten)]`, clap calls `augment_args` on that field's type and merges the resulting arguments directly into the parent struct's argument list. The field type must implement `Args`.
+
+```rust
+#[derive(Parser)]
+struct Cli {
+    #[command(flatten)]
+    common: CommonArgs,   // all CommonArgs fields appear at top level
+
+    #[arg(long)]
+    extra: bool,
+}
+
+#[derive(Args)]
+struct CommonArgs {
+    #[arg(short, long)]
+    verbose: bool,
+
+    #[arg(short, long)]
+    quiet: bool,
+}
+```
+
+Only `#[command(next_help_heading)]` is supported on the field holding the flattened struct; other arg-level attributes are not propagated. Place command-level attributes on the `Args` struct itself or on the `Parser` container.
+
+---
+
+## `#[group(...)]` Attributes
+
+Deriving `Args` implicitly creates an `ArgGroup` for the struct (with `multiple = true` for structs). You can customise this group using `#[group(...)]` attributes on the struct.
+
+```rust
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+struct ExclusiveGroup {
+    #[arg(long)]
+    foo: bool,
+
+    #[arg(long)]
+    bar: bool,
+}
+```
+
+| Attribute | Effect |
+|-----------|--------|
+| `required = true` | At least one argument from this group must be provided |
+| `multiple = false` | Only one argument from this group may be used at a time |
+| `id = <expr>` | Override the auto-generated group ID |
+
+---
+
+## Manual Implementation (Builder + Derive Interop)
+
+You can implement `Args` by hand to define arguments using the builder API while still using `#[command(flatten)]` in a derive struct. Implement both `FromArgMatches` and `Args`:
+
+```rust
+use clap::error::Error;
+use clap::{Arg, ArgAction, ArgMatches, Args, Command, FromArgMatches, Parser};
+
+#[derive(Debug)]
+struct CliArgs {
+    foo: bool,
+    bar: bool,
+    quuz: Option<String>,
+}
+
+impl FromArgMatches for CliArgs {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
+        let mut matches = matches.clone();
+        Self::from_arg_matches_mut(&mut matches)
+    }
+    fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, Error> {
+        Ok(Self {
+            foo: matches.get_flag("foo"),
+            bar: matches.get_flag("bar"),
+            quuz: matches.remove_one::<String>("quuz"),
+        })
+    }
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
+        let mut matches = matches.clone();
+        self.update_from_arg_matches_mut(&mut matches)
+    }
+    fn update_from_arg_matches_mut(&mut self, matches: &mut ArgMatches) -> Result<(), Error> {
+        self.foo |= matches.get_flag("foo");
+        self.bar |= matches.get_flag("bar");
+        if let Some(quuz) = matches.remove_one::<String>("quuz") {
+            self.quuz = Some(quuz);
+        }
+        Ok(())
+    }
+}
+
+impl Args for CliArgs {
+    fn augment_args(cmd: Command) -> Command {
+        cmd.arg(Arg::new("foo").short('f').long("foo").action(ArgAction::SetTrue))
+           .arg(Arg::new("bar").short('b').long("bar").action(ArgAction::SetTrue))
+           .arg(Arg::new("quuz").short('q').long("quuz").action(ArgAction::Set))
+    }
+    fn augment_args_for_update(cmd: Command) -> Command {
+        Self::augment_args(cmd)
+    }
+}
+
+// Use the manual Args impl inside a derive-based Parser
+#[derive(Parser, Debug)]
+struct Cli {
+    #[arg(short, long)]
+    top_level: bool,
+    #[command(flatten)]
+    more_args: CliArgs,
+}
+```
+
+---
+
+## Mapping to `ArgMatches`
+
+Every field in an `Args` struct corresponds to an argument ID derived from the field name (snake\_case converted to kebab-case by default). At extraction time, `FromArgMatches::from_arg_matches` reads values from the `ArgMatches` by those IDs.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::{Args, Parser};
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        vers: Vers,
+    }
+
+    #[derive(Args)]
+    #[group(required = true, multiple = false)]
+    struct Vers {
+        #[arg(long, value_name = "VER")]
+        set_ver: Option<String>,
+        #[arg(long)] major: bool,
+        #[arg(long)] minor: bool,
+        #[arg(long)] patch: bool,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+        // Access via typed fields
+        if let Some(ver) = cli.vers.set_ver.as_deref() {
+            println!("Explicit version: {ver}");
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Args, Command, FromArgMatches as _, arg};
+
+    #[derive(Args, Debug)]
+    struct DerivedArgs {
+        #[arg(short, long)]
+        derived: bool,
+    }
+
+    fn main() {
+        let cli = Command::new("CLI")
+            .arg(arg!(-b --built).action(clap::ArgAction::SetTrue));
+        let cli = DerivedArgs::augment_args(cli);
+
+        let matches = cli.get_matches();
+        println!("built: {:?}", matches.get_flag("built"));
+
+        let derived = DerivedArgs::from_arg_matches(&matches)
+            .map_err(|err| err.exit())
+            .unwrap();
+        println!("derived: {derived:#?}");
+    }
+    ```
+  </Tab>
+</Tabs>

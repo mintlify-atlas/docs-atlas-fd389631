@@ -1,0 +1,340 @@
+---
+title: "clap::Error and ErrorKind: CLI Error Handling Guide"
+sidebarTitle: "Error"
+description: "Complete reference for clap's Error struct and ErrorKind variants — kind, print, exit, render, and creating custom errors with Command::error."
+---
+
+clap represents every parsing failure, validation error, and informational message (such as `--help` and `--version` output) as a `clap::Error`. Each error carries an `ErrorKind` that identifies the category of failure, styled text ready for printing, and an appropriate exit code. Understanding how errors work helps you customise error messages, build wrapper CLIs, and write robust error-handling code.
+
+## The `Error` Struct
+
+```rust
+pub struct Error<F: ErrorFormatter = DefaultFormatter> { /* ... */ }
+```
+
+`Error` is generic over a formatter type, but the default (`DefaultFormatter`, which is `RichFormatter` when the `error-context` feature is enabled) is almost always what you want. The type implements `std::error::Error`, `Display`, `Debug`, `Send`, and `Sync`.
+
+### Constructors
+
+<ParamField path="Error::raw" type="fn(kind: ErrorKind, message: impl Display) -> Self">
+  Creates an unformatted error with an explicit kind and message string. Use this when you need to pass the error to a caller that has access to a `Command` and can call `Error::format`.
+
+  ```rust
+  pub fn raw(kind: ErrorKind, message: impl Display) -> Self
+  ```
+
+  ```rust
+  use clap::{Error, error::ErrorKind};
+
+  let err = Error::raw(
+      ErrorKind::InvalidSubcommand,
+      "recursive alias `last`",
+  );
+  ```
+</ParamField>
+
+<ParamField path="Error::new" type="fn(kind: ErrorKind) -> Self">
+  Creates a bare error with only a kind set. Typically followed by `.with_cmd()` and context inserts.
+
+  ```rust
+  pub fn new(kind: ErrorKind) -> Self
+  ```
+</ParamField>
+
+<ParamField path="Command::error" type="fn(kind: ErrorKind, message: impl Display) -> Error">
+  The recommended way to create a custom user-facing error. Applies the `Command`'s styles and usage information to the error message automatically.
+
+  ```rust
+  // On a Command instance:
+  cmd.error(ErrorKind::InvalidValue, "the value 'xyz' is not supported")
+  ```
+</ParamField>
+
+---
+
+### Methods
+
+<ParamField path="kind" type="fn(&self) -> ErrorKind">
+  Returns the `ErrorKind` for programmatic error classification.
+
+  ```rust
+  pub fn kind(&self) -> ErrorKind
+  ```
+
+  ```rust
+  let result = cmd.try_get_matches_from(["prog", "--unknown"]);
+  if let Err(e) = result {
+      assert_eq!(e.kind(), clap::error::ErrorKind::UnknownArgument);
+  }
+  ```
+</ParamField>
+
+<ParamField path="print" type="fn(&self) -> io::Result<()>">
+  Writes the formatted, styled error message to `stdout` (for `DisplayHelp` and `DisplayVersion`) or `stderr` (for all other kinds).
+
+  ```rust
+  pub fn print(&self) -> io::Result<()>
+  ```
+
+  ```rust
+  match cmd.try_get_matches() {
+      Ok(m) => { /* ... */ }
+      Err(err) => {
+          err.print().expect("Error writing Error");
+      }
+  }
+  ```
+</ParamField>
+
+<ParamField path="exit" type="fn(&self) -> !">
+  Calls `print()` and then exits the process. The exit code is `0` for `DisplayHelp` and `DisplayVersion`, and `2` for all error kinds.
+
+  ```rust
+  pub fn exit(&self) -> !
+  ```
+
+  ```rust
+  let args = Args::try_parse().unwrap_or_else(|e| e.exit());
+  ```
+</ParamField>
+
+<ParamField path="render" type="fn(&self) -> StyledStr">
+  Returns the formatted error message as a `StyledStr` without printing or exiting. Useful for capturing the error text for logging or custom display.
+
+  ```rust
+  pub fn render(&self) -> StyledStr
+  ```
+
+  ```rust
+  let err = cmd.try_get_matches().unwrap_err();
+  let styled = err.render();
+  eprintln!("{styled}");
+  ```
+</ParamField>
+
+<ParamField path="exit_code" type="fn(&self) -> i32">
+  Returns the exit code that `exit()` will use: `0` for help/version output, `2` for usage errors.
+
+  ```rust
+  pub fn exit_code(&self) -> i32
+  ```
+</ParamField>
+
+<ParamField path="use_stderr" type="fn(&self) -> bool">
+  Returns `true` when the error message should be written to `stderr`. Returns `false` for `DisplayHelp` and `DisplayVersion`, which go to `stdout`.
+
+  ```rust
+  pub fn use_stderr(&self) -> bool
+  ```
+</ParamField>
+
+<ParamField path="format" type="fn(self, cmd: &mut Command) -> Self">
+  Applies the `Command`'s context (usage line, styles) to an unformatted raw error. Called automatically by the derive macros; call it manually when constructing errors with `Error::raw`.
+
+  ```rust
+  pub fn format(mut self, cmd: &mut Command) -> Self
+  ```
+</ParamField>
+
+<ParamField path="with_cmd" type="fn(self, cmd: &Command) -> Self">
+  Applies a `Command`'s styles and help-flag information to an error without modifying its message.
+
+  ```rust
+  pub fn with_cmd(self, cmd: &Command) -> Self
+  ```
+</ParamField>
+
+---
+
+## Exit Codes
+
+| Situation | Exit Code |
+|-----------|-----------|
+| `--help` / `--version` displayed | `0` |
+| Usage error, invalid argument, missing argument, etc. | `2` |
+
+---
+
+## `ErrorKind` Enum
+
+`ErrorKind` classifies every possible error scenario. All variants are `#[non_exhaustive]`.
+
+```rust
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ErrorKind { /* ... */ }
+```
+
+<ParamField path="InvalidValue" type="ErrorKind">
+  The user supplied a value not in the argument's set of possible values.
+
+  ```
+  error: invalid value 'other' for '<speed>'
+      [possible values: fast, slow]
+  ```
+</ParamField>
+
+<ParamField path="UnknownArgument" type="ErrorKind">
+  The user supplied a flag, option, or subcommand that is not defined.
+
+  ```
+  error: unexpected argument '--other' found
+  ```
+</ParamField>
+
+<ParamField path="InvalidSubcommand" type="ErrorKind">
+  The user typed an unrecognised subcommand that is close enough to an existing one to trigger a "did you mean?" suggestion. Requires the `suggestions` feature. Falls back to `UnknownArgument` otherwise.
+</ParamField>
+
+<ParamField path="NoEquals" type="ErrorKind">
+  An argument that requires `=` to assign its value was provided without it (e.g., `--color red` instead of `--color=red`).
+</ParamField>
+
+<ParamField path="ValueValidation" type="ErrorKind">
+  A value failed custom validation by a `ValueParser` or type parser (e.g., passing `"abc"` to a `value_parser!(u8)` argument).
+</ParamField>
+
+<ParamField path="TooManyValues" type="ErrorKind">
+  The user provided more values than `Arg::num_args` allows.
+</ParamField>
+
+<ParamField path="TooFewValues" type="ErrorKind">
+  The user provided fewer values than the minimum specified by `Arg::num_args`.
+</ParamField>
+
+<ParamField path="WrongNumberOfValues" type="ErrorKind">
+  The user provided an exact count that differs from what `Arg::num_args` or `Arg::value_names` requires.
+</ParamField>
+
+<ParamField path="ArgumentConflict" type="ErrorKind">
+  Two arguments that conflict with each other via `Arg::conflicts_with` were both provided.
+</ParamField>
+
+<ParamField path="MissingRequiredArgument" type="ErrorKind">
+  One or more required arguments were not provided.
+</ParamField>
+
+<ParamField path="MissingSubcommand" type="ErrorKind">
+  A subcommand is required (via `Command::subcommand_required`) but none was supplied.
+</ParamField>
+
+<ParamField path="InvalidUtf8" type="ErrorKind">
+  An argument value contains bytes that are not valid UTF-8. Use `value_parser!(OsString)` to accept non-UTF-8 values on Unix.
+</ParamField>
+
+<ParamField path="DisplayHelp" type="ErrorKind">
+  Not a true error — `--help` (or a custom help flag) was invoked. The help message is printed to `stdout` and the process exits with code `0`.
+</ParamField>
+
+<ParamField path="DisplayHelpOnMissingArgumentOrSubcommand" type="ErrorKind">
+  Help was displayed because `Command::arg_required_else_help` is set and no argument or subcommand was supplied. Printed to `stderr`.
+</ParamField>
+
+<ParamField path="DisplayVersion" type="ErrorKind">
+  Not a true error — `--version` was invoked. The version string is printed to `stdout` and the process exits with code `0`.
+</ParamField>
+
+<ParamField path="Io" type="ErrorKind">
+  An I/O error occurred while writing to `stderr` or `stdout`, or while reading a configuration file.
+</ParamField>
+
+<ParamField path="Format" type="ErrorKind">
+  A format error occurred during output, typically caused by writing to `stderr` or `stdout`.
+</ParamField>
+
+---
+
+## Custom Errors with `Command::error`
+
+Use `Command::error` to emit application-level validation errors in the same style as clap's built-in errors:
+
+```rust
+use clap::{Command, Parser, error::ErrorKind};
+
+#[derive(Parser)]
+struct Cli {
+    #[arg(long)]
+    port: u16,
+    #[arg(long)]
+    host: String,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    if cli.port < 1024 && !cli.host.is_empty() {
+        // Use CommandFactory to get access to the Command
+        Cli::command()
+            .error(
+                ErrorKind::ValueValidation,
+                "ports below 1024 require elevated privileges",
+            )
+            .exit();
+    }
+}
+```
+
+---
+
+## Error Handling Patterns
+
+<Tabs>
+  <Tab title="Exit on Error (Production)">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Args {
+        #[arg(short, long)]
+        name: String,
+    }
+
+    fn main() {
+        // parse() exits automatically with a styled message on error
+        let args = Args::parse();
+        println!("Hello, {}!", args.name);
+    }
+    ```
+  </Tab>
+  <Tab title="Inspect Errors (Libraries / Tests)">
+    ```rust
+    use clap::{Parser, error::ErrorKind};
+
+    #[derive(Parser)]
+    struct Args {
+        #[arg(short, long)]
+        name: String,
+    }
+
+    fn main() {
+        match Args::try_parse() {
+            Ok(args) => println!("Hello, {}!", args.name),
+            Err(err) if err.kind() == ErrorKind::DisplayHelp => {
+                // Help is not an error; print it and exit cleanly
+                err.print().unwrap();
+                std::process::exit(0);
+            }
+            Err(err) => {
+                eprintln!("Error: {err}");
+                std::process::exit(2);
+            }
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Render Without Printing">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Args {
+        #[arg(long)]
+        input: String,
+    }
+
+    fn parse_args() -> Result<Args, String> {
+        Args::try_parse().map_err(|e| e.render().to_string())
+    }
+    ```
+  </Tab>
+</Tabs>

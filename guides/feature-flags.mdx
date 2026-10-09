@@ -1,0 +1,151 @@
+---
+title: "Feature Flags: Tune clap's Cargo Features Your Way"
+sidebarTitle: "Feature Flags"
+description: "A complete guide to clap's Cargo feature flags — what each one enables, its default state, and how to tune binary size and compile time."
+---
+
+Clap ships with a rich set of Cargo feature flags that let you pay only for the functionality your project actually needs. The defaults strike a balance between convenience and overhead, but stripping unused features can meaningfully reduce compile times and binary size — especially for constrained environments such as embedded systems or minimal CLI tools.
+
+## Default Features
+
+When you add `clap` to your `Cargo.toml` without specifying features, you get the following set enabled automatically:
+
+```toml
+[dependencies]
+clap = "4"
+```
+
+This is equivalent to:
+
+```toml
+[dependencies]
+clap = { version = "4", features = ["std", "color", "help", "usage", "error-context", "suggestions"] }
+```
+
+<Note>
+  All six default features can be disabled individually. To start from a minimal
+  baseline and opt in only to what you need, use `default-features = false`.
+</Note>
+
+## Feature Reference Table
+
+### Default Features
+
+| Feature | What it enables | Default |
+|---|---|---|
+| `std` | Placeholder for `no_std` support in a backwards-compatible way. Not currently used for functionality but signals standard library availability. | ✅ Yes |
+| `color` | Terminal styling of help and error messages via ANSI escape codes. Customize with [`Command::styles`](https://docs.rs/clap/latest/clap/struct.Command.html#method.styles). | ✅ Yes |
+| `help` | Auto-generates `--help` / `-h` output from your `Command` definition. | ✅ Yes |
+| `usage` | Auto-generates the `Usage:` line shown in help and error output. | ✅ Yes |
+| `error-context` | Includes contextual information in error messages (which arg failed, what was expected, etc.). | ✅ Yes |
+| `suggestions` | Enables the *"Did you mean '--myoption'?"* typo-correction feature. | ✅ Yes |
+
+### Optional Features
+
+| Feature | What it enables | Default |
+|---|---|---|
+| `derive` | Enables `#[derive(Parser)]` and related proc-macros (`Args`, `Subcommand`, `ValueEnum`). Required for the derive API. | ❌ No |
+| `env` | Reads environment variables during argument parsing (e.g. `Arg::env("MY_VAR")`). | ❌ No |
+| `unicode` | Full support for Unicode characters — including emoji — in argument values and help text. | ❌ No |
+| `wrap_help` | Wraps help text to the current terminal width automatically. | ❌ No |
+| `cargo` | Enables macros that read `CARGO_*` environment variables such as `command!()`, `crate_version!()`, and `crate_authors!()`. Disable if you're not using Cargo. | ❌ No |
+| `string` | Allows runtime-generated strings (e.g. with [`Str`](https://docs.rs/clap/latest/clap/builder/struct.Str.html)). | ❌ No |
+| `deprecated` | Guided migration experience to prepare for the next breaking release. May become a default feature in a future version. | ❌ No |
+
+### Experimental Features
+
+<Warning>
+  Experimental features may contain **breaking changes between minor releases**.
+  They are not covered by semantic versioning guarantees.
+</Warning>
+
+| Feature | What it enables | Default |
+|---|---|---|
+| `unstable-v5` | Preview features that will be stabilized in the v5.0 release. Implies `deprecated`. | ❌ No |
+
+## Enabling and Disabling Features
+
+<Tabs>
+  <Tab title="Enable optional features">
+    Add the features you want to the `features` list:
+
+    ```toml
+    [dependencies]
+    clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+    ```
+  </Tab>
+  <Tab title="Disable default features">
+    Start from zero and opt in only to what you need:
+
+    ```toml
+    [dependencies]
+    clap = { version = "4", default-features = false, features = ["help", "usage"] }
+    ```
+  </Tab>
+  <Tab title="Minimal binary (no_std-friendly)">
+    For the smallest possible build or `no_std` targets, disable all defaults and add only `std` if your target supports it:
+
+    ```toml
+    [dependencies]
+    clap = { version = "4", default-features = false, features = ["std"] }
+    ```
+  </Tab>
+</Tabs>
+
+## Trade-Offs
+
+<CardGroup cols={2}>
+  <Card title="Binary Size" icon="weight-scale">
+    Each feature adds code. Disabling `color`, `unicode`, and `wrap_help` can remove
+    transitive dependencies (`termcolor`, `unicode-width`, `textwrap`) and noticeably
+    shrink the final binary.
+  </Card>
+  <Card title="Compile Time" icon="timer">
+    The `derive` feature pulls in `clap_derive`, a proc-macro crate. If compile time
+    is critical, use the builder API with `default-features = false` and no `derive`.
+  </Card>
+  <Card title="Functionality" icon="puzzle-piece">
+    Disabling `help` removes auto-generated `--help`. Disabling `error-context` produces
+    terser — but less informative — error messages. Disabling `suggestions` removes the
+    typo-correction hints.
+  </Card>
+  <Card title="no_std Usage" icon="microchip">
+    The `std` feature is a forward-compatibility placeholder. True `no_std` builds are
+    not yet supported, but keeping `std` in your feature list ensures a smooth upgrade
+    path when support lands.
+  </Card>
+</CardGroup>
+
+## Common Configurations
+
+<Steps>
+  <Step title="Full-featured application">
+    Enable everything for a polished user experience:
+
+    ```toml
+    [dependencies]
+    clap = { version = "4", features = ["derive", "env", "unicode", "wrap_help", "cargo"] }
+    ```
+  </Step>
+  <Step title="Lean server binary">
+    Keep help and error context but drop cosmetic features:
+
+    ```toml
+    [dependencies]
+    clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "derive"] }
+    ```
+  </Step>
+  <Step title="Absolute minimum">
+    Bare-minimum builder API — no auto-generated help, no colors, no suggestions:
+
+    ```toml
+    [dependencies]
+    clap = { version = "4", default-features = false, features = ["std"] }
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Use `cargo bloat --release --crates` to measure which crates contribute most to
+  your binary size, then audit your clap feature flags accordingly.
+</Tip>

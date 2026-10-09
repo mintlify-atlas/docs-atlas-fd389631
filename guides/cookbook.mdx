@@ -1,0 +1,673 @@
+---
+title: "Cookbook: Real-World clap CLI Patterns and Recipes"
+sidebarTitle: "Cookbook"
+description: "Working code recipes for common CLI patterns: git-style subcommands, pacman flag subcommands, multicall binaries, cargo-style tools, and REPLs."
+---
+
+This cookbook collects practical, runnable examples drawn directly from the clap repository. Each recipe demonstrates a complete, realistic CLI pattern — copy, adapt, and build on them as starting points for your own tools.
+
+---
+
+## Git-Style CLI with Subcommands and Aliases
+
+A git-like CLI showcases the most common clap patterns at once: required subcommands, per-subcommand arguments, external subcommand passthrough, and an alias-expansion layer on top of the raw `ArgMatches`.
+
+```rust
+// examples/git.rs
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+use clap::{ArgMatches, Command, arg};
+
+fn cli() -> Command {
+    Command::new("git")
+        .about("A fictional versioning CLI")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .allow_external_subcommands(true)
+        .subcommand(
+            Command::new("clone")
+                .about("Clones repos")
+                .arg(arg!(<REMOTE> "The remote to clone"))
+                .arg_required_else_help(true),
+        )
+        .subcommand(
+            Command::new("diff")
+                .about("Compare two commits")
+                .arg(arg!(base: [COMMIT]))
+                .arg(arg!(head: [COMMIT]))
+                .arg(arg!(path: [PATH]).last(true))
+                .arg(
+                    arg!(--color <WHEN>)
+                        .value_parser(["always", "auto", "never"])
+                        .num_args(0..=1)
+                        .require_equals(true)
+                        .default_value("auto")
+                        .default_missing_value("always"),
+                ),
+        )
+        .subcommand(
+            Command::new("push")
+                .about("pushes things")
+                .arg(arg!(<REMOTE> "The remote to target"))
+                .arg_required_else_help(true),
+        )
+        .subcommand(
+            Command::new("add")
+                .about("adds things")
+                .arg_required_else_help(true)
+                .arg(arg!(<PATH> ... "Stuff to add").value_parser(clap::value_parser!(PathBuf))),
+        )
+        .subcommand(
+            Command::new("stash")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .args(push_args())
+                .subcommand(Command::new("push").args(push_args()))
+                .subcommand(Command::new("pop").arg(arg!([STASH])))
+                .subcommand(Command::new("apply").arg(arg!([STASH]))),
+        )
+}
+
+fn push_args() -> Vec<clap::Arg> {
+    vec![arg!(-m --message <MESSAGE>)]
+}
+
+fn aliases() -> HashMap<&'static str, Vec<&'static str>> {
+    HashMap::from([
+        ("last", vec!["diff", "HEAD~", "HEAD", "--"]),
+        ("stage", vec!["add"]),
+    ])
+}
+
+fn parse_aliases() -> Result<ArgMatches, clap::Error> {
+    let matches = cli().try_get_matches()?;
+    expand_aliases(matches, Vec::new())
+}
+
+fn expand_aliases(
+    matches: ArgMatches,
+    mut expanded: Vec<String>,
+) -> Result<ArgMatches, clap::Error> {
+    let Some((name, sub_matches)) = matches.subcommand() else {
+        return Ok(matches);
+    };
+    if cli().find_subcommand(name).is_some() {
+        return Ok(matches);
+    }
+
+    let aliases = aliases();
+    let Some(alias) = aliases.get(name) else {
+        return Ok(matches);
+    };
+    let mut args = alias.iter().map(OsString::from).collect::<Vec<_>>();
+    args.extend(
+        sub_matches
+            .get_many::<OsString>("")
+            .into_iter()
+            .flatten()
+            .cloned(),
+    );
+    let matches = cli().no_binary_name(true).try_get_matches_from(args)?;
+    let new_name = matches.subcommand_name().expect("subcommand required");
+    expanded.push(name.to_owned());
+    if expanded.iter().any(|name| name == new_name) {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::InvalidSubcommand,
+            format!("recursive alias `{}`", expanded[0]),
+        ));
+    }
+
+    expand_aliases(matches, expanded)
+}
+
+fn main() {
+    let matches = parse_aliases().unwrap_or_else(|error| error.exit());
+
+    match matches.subcommand() {
+        Some(("clone", sub_matches)) => {
+            println!(
+                "Cloning {}",
+                sub_matches.get_one::<String>("REMOTE").expect("required")
+            );
+        }
+        Some(("diff", sub_matches)) => {
+            let color = sub_matches
+                .get_one::<String>("color")
+                .map(|s| s.as_str())
+                .expect("defaulted in clap");
+
+            let mut base = sub_matches.get_one::<String>("base").map(|s| s.as_str());
+            let mut head = sub_matches.get_one::<String>("head").map(|s| s.as_str());
+            let mut path = sub_matches.get_one::<String>("path").map(|s| s.as_str());
+            if path.is_none() {
+                path = head;
+                head = None;
+                if path.is_none() {
+                    path = base;
+                    base = None;
+                }
+            }
+            let base = base.unwrap_or("stage");
+            let head = head.unwrap_or("worktree");
+            let path = path.unwrap_or("");
+            println!("Diffing {base}..{head} {path} (color={color})");
+        }
+        Some(("push", sub_matches)) => {
+            println!(
+                "Pushing to {}",
+                sub_matches.get_one::<String>("REMOTE").expect("required")
+            );
+        }
+        Some(("add", sub_matches)) => {
+            let paths = sub_matches
+                .get_many::<PathBuf>("PATH")
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            println!("Adding {paths:?}");
+        }
+        Some(("stash", sub_matches)) => {
+            let stash_command = sub_matches.subcommand().unwrap_or(("push", sub_matches));
+            match stash_command {
+                ("apply", sub_matches) => {
+                    let stash = sub_matches.get_one::<String>("STASH");
+                    println!("Applying {stash:?}");
+                }
+                ("pop", sub_matches) => {
+                    let stash = sub_matches.get_one::<String>("STASH");
+                    println!("Popping {stash:?}");
+                }
+                ("push", sub_matches) => {
+                    let message = sub_matches.get_one::<String>("message");
+                    println!("Pushing {message:?}");
+                }
+                (name, _) => {
+                    unreachable!("Unsupported subcommand `{name}`")
+                }
+            }
+        }
+        Some((ext, sub_matches)) => {
+            let args = sub_matches
+                .get_many::<OsString>("")
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            println!("Calling out to {ext:?} with {args:?}");
+        }
+        _ => unreachable!(),
+    }
+}
+```
+
+**Key patterns demonstrated:**
+- `subcommand_required(true)` — error if no subcommand is given
+- `allow_external_subcommands(true)` — capture unrecognised subcommands as `("name", OsString args)`
+- `args_conflicts_with_subcommands(true)` on `stash` — make top-level args and sub-subcommands mutually exclusive
+- Alias expansion via `no_binary_name(true).try_get_matches_from(args)` to re-parse with the alias expanded
+
+---
+
+## Pacman-Style CLI with Flag Subcommands
+
+Pacman-style CLIs use short flags (e.g. `-S`, `-Q`) as subcommand selectors. Clap supports this natively via `short_flag` and `long_flag` on subcommands.
+
+```rust
+// examples/pacman.rs
+use clap::{Arg, ArgAction, Command};
+
+fn cli() -> Command {
+    Command::new("pacman")
+        .about("package manager utility")
+        .version("5.2.1")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("query")
+                .short_flag('Q')
+                .long_flag("query")
+                .about("Query the package database.")
+                .arg(
+                    Arg::new("search")
+                        .short('s')
+                        .long("search")
+                        .help("search locally installed packages for matching strings")
+                        .conflicts_with("info")
+                        .action(ArgAction::Set)
+                        .num_args(1..),
+                )
+                .arg(
+                    Arg::new("info")
+                        .long("info")
+                        .short('i')
+                        .conflicts_with("search")
+                        .help("view package information")
+                        .action(ArgAction::Set)
+                        .num_args(1..),
+                ),
+        )
+        .subcommand(
+            Command::new("sync")
+                .short_flag('S')
+                .long_flag("sync")
+                .about("Synchronize packages.")
+                .arg(
+                    Arg::new("search")
+                        .short('s')
+                        .long("search")
+                        .conflicts_with("info")
+                        .action(ArgAction::Set)
+                        .num_args(1..)
+                        .help("search remote repositories for matching strings"),
+                )
+                .arg(
+                    Arg::new("info")
+                        .long("info")
+                        .conflicts_with("search")
+                        .short('i')
+                        .action(ArgAction::SetTrue)
+                        .help("view package information"),
+                )
+                .arg(
+                    Arg::new("package")
+                        .help("packages")
+                        .required_unless_present("search")
+                        .action(ArgAction::Set)
+                        .num_args(1..),
+                ),
+        )
+}
+
+fn main() {
+    let matches = cli().get_matches();
+
+    match matches.subcommand() {
+        Some(("sync", sync_matches)) => {
+            if sync_matches.contains_id("search") {
+                let packages: Vec<_> = sync_matches
+                    .get_many::<String>("search")
+                    .expect("contains_id")
+                    .map(|s| s.as_str())
+                    .collect();
+                let values = packages.join(", ");
+                println!("Searching for {values}...");
+                return;
+            }
+
+            let packages: Vec<_> = sync_matches
+                .get_many::<String>("package")
+                .expect("is present")
+                .map(|s| s.as_str())
+                .collect();
+            let values = packages.join(", ");
+
+            if sync_matches.get_flag("info") {
+                println!("Retrieving info for {values}...");
+            } else {
+                println!("Installing {values}...");
+            }
+        }
+        Some(("query", query_matches)) => {
+            if let Some(packages) = query_matches.get_many::<String>("info") {
+                let comma_sep = packages.map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
+                println!("Retrieving info for {comma_sep}...");
+            } else if let Some(queries) = query_matches.get_many::<String>("search") {
+                let comma_sep = queries.map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
+                println!("Searching Locally for {comma_sep}...");
+            } else {
+                println!("Displaying all locally installed packages...");
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+```
+
+**Key patterns demonstrated:**
+- `short_flag('Q')` / `long_flag("query")` — subcommands invocable as `-Q` or `--query`
+- `conflicts_with` — mutual exclusion between sibling arguments
+- `required_unless_present` — conditional required arguments
+
+---
+
+## Busybox-Style Multicall Binary
+
+A multicall binary runs different logic depending on the name used to invoke it. This is how BusyBox works: a single executable is symlinked to many names, each providing a different applet.
+
+```rust
+// examples/multicall-busybox.rs
+use std::path::PathBuf;
+use std::process::exit;
+
+use clap::{Arg, ArgAction, Command, value_parser};
+
+fn applet_commands() -> [Command; 2] {
+    [
+        Command::new("true").about("does nothing successfully"),
+        Command::new("false").about("does nothing unsuccessfully"),
+    ]
+}
+
+fn main() {
+    let cmd = Command::new(env!("CARGO_CRATE_NAME"))
+        .multicall(true)
+        .subcommand(
+            Command::new("busybox")
+                .arg_required_else_help(true)
+                .subcommand_value_name("APPLET")
+                .subcommand_help_heading("APPLETS")
+                .arg(
+                    Arg::new("install")
+                        .long("install")
+                        .help("Install hardlinks for all subcommands in path")
+                        .exclusive(true)
+                        .action(ArgAction::Set)
+                        .default_missing_value("/usr/local/bin")
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .subcommands(applet_commands()),
+        )
+        .subcommands(applet_commands());
+
+    let matches = cmd.get_matches();
+    let mut subcommand = matches.subcommand();
+    if let Some(("busybox", cmd)) = subcommand {
+        if cmd.contains_id("install") {
+            unimplemented!("Make hardlinks to the executable here");
+        }
+        subcommand = cmd.subcommand();
+    }
+    match subcommand {
+        Some(("false", _)) => exit(1),
+        Some(("true", _)) => exit(0),
+        _ => unreachable!("parser should ensure only valid subcommand names are used"),
+    }
+}
+```
+
+**Key patterns demonstrated:**
+- `multicall(true)` — clap selects the subcommand from `argv[0]` (the program name)
+- `subcommand_value_name` / `subcommand_help_heading` — customise help output for applets
+- `exclusive(true)` — an argument that cannot be combined with any other
+
+A simpler multicall example (hostname/dnsdomainname) shows the minimal pattern:
+
+```rust
+// examples/multicall-hostname.rs
+use clap::Command;
+
+fn main() {
+    let cmd = Command::new(env!("CARGO_CRATE_NAME"))
+        .multicall(true)
+        .arg_required_else_help(true)
+        .subcommand_value_name("APPLET")
+        .subcommand_help_heading("APPLETS")
+        .subcommand(Command::new("hostname").about("show hostname part of FQDN"))
+        .subcommand(Command::new("dnsdomainname").about("show domain name part of FQDN"));
+
+    match cmd.get_matches().subcommand_name() {
+        Some("hostname") => println!("www"),
+        Some("dnsdomainname") => println!("example.com"),
+        _ => unreachable!("parser should ensure only valid subcommand names are used"),
+    }
+}
+```
+
+---
+
+## Cargo-Style CLI with Custom Styling
+
+Cargo itself uses clap, and its distinctive colour scheme is available via the `clap-cargo` crate. This example shows how to replicate that style:
+
+```rust
+// examples/cargo-example.rs
+fn main() {
+    let cmd = clap::Command::new("cargo")
+        .bin_name("cargo")
+        .styles(CLAP_STYLING)
+        .subcommand_required(true)
+        .subcommand(
+            clap::command!("example").arg(
+                clap::arg!(--"manifest-path" <PATH>)
+                    .value_parser(clap::value_parser!(std::path::PathBuf)),
+            ),
+        );
+    let matches = cmd.get_matches();
+    let matches = match matches.subcommand() {
+        Some(("example", matches)) => matches,
+        _ => unreachable!("clap should ensure we don't get here"),
+    };
+    let manifest_path = matches.get_one::<std::path::PathBuf>("manifest-path");
+    println!("{manifest_path:?}");
+}
+
+// See also `clap_cargo::style::CLAP_STYLING`
+pub const CLAP_STYLING: clap::builder::styling::Styles = clap::builder::styling::Styles::styled()
+    .header(clap_cargo::style::HEADER)
+    .usage(clap_cargo::style::USAGE)
+    .literal(clap_cargo::style::LITERAL)
+    .placeholder(clap_cargo::style::PLACEHOLDER)
+    .error(clap_cargo::style::ERROR)
+    .valid(clap_cargo::style::VALID)
+    .invalid(clap_cargo::style::INVALID);
+```
+
+The same example using the derive API:
+
+```rust
+// examples/cargo-example-derive.rs
+use clap::Parser;
+
+#[derive(Parser)] // requires `derive` feature
+#[command(name = "cargo")]
+#[command(bin_name = "cargo")]
+#[command(styles = CLAP_STYLING)]
+enum CargoCli {
+    ExampleDerive(ExampleDeriveArgs),
+}
+
+// See also `clap_cargo::style::CLAP_STYLING`
+pub const CLAP_STYLING: clap::builder::styling::Styles = clap::builder::styling::Styles::styled()
+    .header(clap_cargo::style::HEADER)
+    .usage(clap_cargo::style::USAGE)
+    .literal(clap_cargo::style::LITERAL)
+    .placeholder(clap_cargo::style::PLACEHOLDER)
+    .error(clap_cargo::style::ERROR)
+    .valid(clap_cargo::style::VALID)
+    .invalid(clap_cargo::style::INVALID);
+
+#[derive(clap::Args)]
+#[command(version, about, long_about = None)]
+struct ExampleDeriveArgs {
+    #[arg(long)]
+    manifest_path: Option<std::path::PathBuf>,
+}
+
+fn main() {
+    let CargoCli::ExampleDerive(args) = CargoCli::parse();
+    println!("{:?}", args.manifest_path);
+}
+```
+
+<Note>
+  The `clap-cargo` crate is a separate dependency. Add it to your `Cargo.toml`
+  if you want to replicate Cargo's exact colour scheme:
+
+  ```toml
+  [dependencies]
+  clap-cargo = { version = "0.15", default-features = false }
+  ```
+</Note>
+
+---
+
+## Escaped Positional Arguments with `--`
+
+Use `.last(true)` on a positional argument to make it only accessible after the `--` separator. This is the standard Unix convention for separating tool options from arguments passed to a sub-process.
+
+```rust
+// examples/escaped-positional.rs
+use clap::{ArgAction, arg, command, value_parser};
+
+fn main() {
+    let matches = command!() // requires `cargo` feature
+        .arg(arg!(eff: -f).action(ArgAction::SetTrue))
+        .arg(arg!(pea: -p <PEAR>).value_parser(value_parser!(String)))
+        .arg(
+            // Indicates that `slop` is only accessible after `--`.
+            arg!(slop: [SLOP])
+                .num_args(1..)
+                .last(true)
+                .value_parser(value_parser!(String)),
+        )
+        .get_matches();
+
+    // This is what will happen with `myprog -f -p=bob -- sloppy slop slop`...
+
+    // -f used: true
+    println!("-f used: {:?}", matches.get_flag("eff"));
+    // -p's value: Some("bob")
+    println!("-p's value: {:?}", matches.get_one::<String>("pea"));
+    // 'slops' values: Some(["sloppy", "slop", "slop"])
+    println!(
+        "'slops' values: {:?}",
+        matches
+            .get_many::<String>("slop")
+            .map(|vals| vals.collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+}
+```
+
+Example invocation:
+
+```console
+$ myprog -f -p=bob -- sloppy slop slop
+-f used: true
+-p's value: Some("bob")
+'slops' values: ["sloppy", "slop", "slop"]
+```
+
+**Key patterns demonstrated:**
+- `.last(true)` — argument only accepted after `--`
+- `.num_args(1..)` — accept one or more values
+- `matches.get_many::<T>()` — collect multiple values into an iterator
+
+---
+
+## REPL Pattern
+
+A REPL (Read-Eval-Print Loop) that parses each user input line as a fresh clap invocation. The key is `.multicall(true)` combined with `Command::try_get_matches_from` in a loop, so parse errors print a message instead of exiting.
+
+```rust
+// examples/repl.rs
+use std::io::Write;
+use clap::Command;
+
+fn main() -> Result<(), String> {
+    loop {
+        let line = readline()?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        match respond(line) {
+            Ok(quit) => {
+                if quit {
+                    break;
+                }
+            }
+            Err(err) => {
+                write!(std::io::stdout(), "{err}").map_err(|e| e.to_string())?;
+                std::io::stdout().flush().map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn respond(line: &str) -> Result<bool, String> {
+    let args = shlex::split(line).ok_or("error: Invalid quoting")?;
+    let matches = cli()
+        .try_get_matches_from(args)
+        .map_err(|e| e.to_string())?;
+    match matches.subcommand() {
+        Some(("ping", _matches)) => {
+            write!(std::io::stdout(), "Pong").map_err(|e| e.to_string())?;
+            std::io::stdout().flush().map_err(|e| e.to_string())?;
+        }
+        Some(("quit", _matches)) => {
+            write!(std::io::stdout(), "Exiting ...").map_err(|e| e.to_string())?;
+            std::io::stdout().flush().map_err(|e| e.to_string())?;
+            return Ok(true);
+        }
+        Some((name, _matches)) => unimplemented!("{name}"),
+        None => unreachable!("subcommand required"),
+    }
+
+    Ok(false)
+}
+
+fn cli() -> Command {
+    // strip out usage
+    const PARSER_TEMPLATE: &str = "\
+        {all-args}
+    ";
+    // strip out name/version
+    const APPLET_TEMPLATE: &str = "\
+        {about-with-newline}\n\
+        {usage-heading}\n    {usage}\n\
+        \n\
+        {all-args}{after-help}\
+    ";
+
+    Command::new("repl")
+        .multicall(true)
+        .arg_required_else_help(true)
+        .subcommand_required(true)
+        .subcommand_value_name("APPLET")
+        .subcommand_help_heading("APPLETS")
+        .help_template(PARSER_TEMPLATE)
+        .subcommand(
+            Command::new("ping")
+                .about("Get a response")
+                .help_template(APPLET_TEMPLATE),
+        )
+        .subcommand(
+            Command::new("quit")
+                .alias("exit")
+                .about("Quit the REPL")
+                .help_template(APPLET_TEMPLATE),
+        )
+}
+
+fn readline() -> Result<String, String> {
+    write!(std::io::stdout(), "$ ").map_err(|e| e.to_string())?;
+    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    let mut buffer = String::new();
+    std::io::stdin()
+        .read_line(&mut buffer)
+        .map_err(|e| e.to_string())?;
+    Ok(buffer)
+}
+```
+
+<Note>
+  This example requires the `shlex` crate for shell-like word splitting. Add it
+  to your dependencies:
+
+  ```toml
+  [dependencies]
+  shlex = "2"
+  clap = { version = "4", features = ["help"] }
+  ```
+</Note>
+
+**Key patterns demonstrated:**
+- `multicall(true)` — the program name is stripped from each parse; each subcommand is its own "command"
+- `help_template` — custom formatting to remove the top-level name/version header
+- `try_get_matches_from` — parse without calling `exit()` on error, so the REPL can continue
+- `.alias("exit")` — accept multiple names for the same subcommand

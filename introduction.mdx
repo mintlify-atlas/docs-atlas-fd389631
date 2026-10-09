@@ -1,0 +1,156 @@
+---
+title: "Introduction to clap: The Rust Command-Line Parser"
+sidebarTitle: "Introduction"
+description: "Learn what clap is, how its derive and builder APIs compare, key features, ecosystem companion crates, and when to choose it for your Rust CLI."
+---
+
+clap is the most widely used command-line argument parser for Rust. It handles everything from the simplest flag to deeply nested subcommands with typed values — letting you focus on your application logic rather than parsing boilerplate. Whether you prefer declaring your CLI through Rust structs or assembling it step-by-step in code, clap offers a first-class path for both styles.
+
+## What is clap?
+
+clap (version 4.x) is a Rust library that transforms raw command-line arguments into structured, validated data your program can use directly. It generates help text, usage strings, error messages with spelling suggestions, and shell completions — all from the same definition you write to describe your arguments.
+
+A few things set clap apart from alternatives:
+
+- **Zero boilerplate parsing** — no manual `argv` iteration, no fragile string splitting
+- **Automatic `--help` and `--version`** — generated from your struct docs or builder calls
+- **Rich error messages** — typo suggestions (`Did you mean '--verbose'?`), contextual failures, and coloured output
+- **Two complementary APIs** — choose the level of abstraction that fits your project
+
+<CardGroup cols={2}>
+  <Card title="Derive API" icon="wand-magic-sparkles">
+    Annotate a plain Rust struct with `#[derive(Parser)]`. clap reads the field types, doc comments, and attributes to build the parser for you. Best for most projects.
+  </Card>
+  <Card title="Builder API" icon="screwdriver-wrench">
+    Construct a `Command` programmatically by chaining method calls. Gives you maximum control and works in environments where proc-macros are unavailable.
+  </Card>
+</CardGroup>
+
+## The Two APIs at a Glance
+
+Both APIs produce identical runtime behaviour. The derive API is a thin code-generation layer on top of the builder API, so they interoperate freely.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    /// Simple program to greet a person
+    #[derive(Parser, Debug)]
+    #[command(version, about, long_about = None)]
+    struct Args {
+        /// Name of the person to greet
+        #[arg(short, long)]
+        name: String,
+
+        /// Number of times to greet
+        #[arg(short, long, default_value_t = 1)]
+        count: u8,
+    }
+
+    fn main() {
+        let args = Args::parse();
+
+        for _ in 0..args.count {
+            println!("Hello {}!", args.name);
+        }
+    }
+    ```
+
+    Field types drive the parser: `String` expects a value, `bool` becomes a flag, `Option<T>` makes an argument optional, and `Vec<T>` accepts multiple values. Doc comments become the help text automatically.
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    fn main() {
+        let matches = Command::new("greet")
+            .version("1.0")
+            .about("Simple program to greet a person")
+            .arg(
+                Arg::new("name")
+                    .short('n')
+                    .long("name")
+                    .required(true)
+                    .help("Name of the person to greet"),
+            )
+            .arg(
+                Arg::new("count")
+                    .short('c')
+                    .long("count")
+                    .default_value("1")
+                    .help("Number of times to greet"),
+            )
+            .get_matches();
+
+        let name = matches.get_one::<String>("name").unwrap();
+        let count = matches.get_one::<String>("count").unwrap()
+            .parse::<u8>().unwrap();
+
+        for _ in 0..count {
+            println!("Hello {name}!");
+        }
+    }
+    ```
+
+    Every argument is described by chaining methods on `Arg`. Matches are retrieved by name with `get_one::<T>()`.
+  </Tab>
+</Tabs>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Automatic Help & Version" icon="circle-question">
+    `--help` and `--version` flags are generated for free. Pass `version` and `about` to `#[command(...)]` or `.version()` / `.about()` on the builder.
+  </Card>
+  <Card title="Subcommands" icon="sitemap">
+    Model `git`-style CLIs with nested subcommands. Use `#[command(subcommand)]` in the derive API or `Command::subcommand()` in the builder.
+  </Card>
+  <Card title="Typed Values" icon="code">
+    Any type that implements `FromStr` (or clap's `ValueParser`) can be used directly. Invalid input is caught with a descriptive error before `main` runs.
+  </Card>
+  <Card title="Environment Variables" icon="leaf">
+    Enable the `env` feature flag to fall back to environment variables when a flag is not supplied on the command line.
+  </Card>
+  <Card title="Colorised Output" icon="palette">
+    Terminal styling for help text and error messages is on by default via the `color` feature, and fully customisable with `Command::styles`.
+  </Card>
+  <Card title="Typo Suggestions" icon="lightbulb">
+    The `suggestions` feature flag produces `Did you mean '--flag'?` hints whenever an unknown argument closely matches a known one.
+  </Card>
+</CardGroup>
+
+## The clap Ecosystem
+
+clap is the core parser. Several official companion crates extend it for common use-cases:
+
+| Crate | Purpose |
+|---|---|
+| [`clap_complete`](https://crates.io/crates/clap_complete) | Generate shell completion scripts for Bash, Zsh, Fish, PowerShell, and Elvish |
+| [`clap_mangen`](https://crates.io/crates/clap_mangen) | Generate man page source in roff format |
+| [`clap_lex`](https://crates.io/crates/clap_lex) | Low-level lexer used internally; available if you need raw token access |
+
+Community crates worth knowing about:
+
+- **[wild](https://crates.io/crates/wild)** — glob expansion on Windows (like Unix shells provide)
+- **[argfile](https://crates.io/crates/argfile)** — load additional arguments from a response file
+- **[clap-verbosity-flag](https://crates.io/crates/clap-verbosity-flag)** — a ready-made `-v`/`-vv`/`-vvv` verbosity argument
+- **[colorchoice-clap](https://crates.io/crates/colorchoice-clap)** — a `--color` argument that wires into the `colorchoice` ecosystem
+
+## When to Use clap
+
+clap is an excellent fit when you need any of the following:
+
+- Multiple subcommands (think `cargo build`, `git commit`)
+- Typed argument validation before your application logic runs
+- Auto-generated help text that stays in sync with your code
+- Shell completion scripts without extra tooling
+- A polished user experience with coloured output and spelling suggestions
+
+<Note>
+  If binary size and compile time are your primary constraints, consider lighter parsers such as [pico-args](https://crates.io/crates/pico-args) or [lexopt](https://crates.io/crates/lexopt). clap optimises for developer experience and feature richness. See the [argparse benchmarks](https://github.com/rust-cli/argparse-benchmarks-rs) for a detailed comparison.
+</Note>
+
+## Licensing
+
+clap is dual-licensed under [MIT](https://github.com/clap-rs/clap/blob/main/LICENSE-MIT) and [Apache 2.0](https://github.com/clap-rs/clap/blob/main/LICENSE-APACHE). You may use it under either licence.

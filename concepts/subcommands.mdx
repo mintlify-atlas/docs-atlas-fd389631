@@ -1,0 +1,319 @@
+---
+title: "Subcommands and Multicall Binaries in clap 4.x CLI"
+sidebarTitle: "Subcommands"
+description: "Add subcommands with Command::subcommand(), use the derive API, nest subcommands, allow external subcommands, and build multicall binaries in clap 4."
+---
+
+Many command-line tools — `git`, `cargo`, `docker` — organise their functionality into **subcommands**: named child commands that each have their own arguments, help text, and logic. Clap 4 makes it straightforward to declare subcommands both with the builder API (`Command::subcommand`) and with the derive API (`#[derive(Subcommand)]`). This guide covers adding basic subcommands, reading the matched subcommand at runtime, nesting subcommands, delegating to external programs with `allow_external_subcommands`, and implementing the busybox/multicall pattern.
+
+---
+
+## Adding Subcommands with the Builder API
+
+Call `.subcommand(Command::new("name"))` on your root `Command` to register a child command. Each subcommand is itself a full `Command` and can hold its own arguments and even further nested subcommands.
+
+```rust
+use clap::{Command, arg, command};
+
+fn main() {
+    let matches = command!()
+        .propagate_version(true)
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("add")
+                .about("Adds files to myapp")
+                .arg(arg!([NAME])),
+        )
+        .get_matches();
+
+    match matches.subcommand() {
+        Some(("add", sub_matches)) => println!(
+            "'myapp add' was used, name is: {:?}",
+            sub_matches.get_one::<String>("NAME")
+        ),
+        _ => unreachable!(
+            "Exhausted list of subcommands and subcommand_required prevents `None`"
+        ),
+    }
+}
+```
+
+<Steps>
+  <Step title="Register subcommands">
+    Pass a `Command` to `.subcommand(…)`. Use `.about()` to describe it and add arguments just as you would on the root command.
+  </Step>
+  <Step title="Require a subcommand">
+    Set `.subcommand_required(true)` so that running the binary with no subcommand is an error. Combine with `.arg_required_else_help(true)` to print help instead.
+  </Step>
+  <Step title="Match the result">
+    Call `matches.subcommand()` to get `Option<(&str, &ArgMatches)>`. Pattern-match on the subcommand name and use the inner `ArgMatches` for that subcommand's arguments.
+  </Step>
+</Steps>
+
+---
+
+## Derive API Subcommands
+
+The derive API maps Rust enums to subcommand sets. Annotate an enum with `#[derive(Subcommand)]` and embed it in your `Parser` struct with `#[command(subcommand)]`.
+
+```rust
+use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
+
+/// A fictional versioning CLI
+#[derive(Debug, Parser)]
+#[command(name = "git")]
+#[command(about = "A fictional versioning CLI", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Clones repos
+    #[command(arg_required_else_help = true)]
+    Clone {
+        /// The remote to clone
+        remote: String,
+    },
+    /// adds things
+    #[command(arg_required_else_help = true)]
+    Add {
+        /// Stuff to add
+        #[arg(required = true)]
+        path: Vec<PathBuf>,
+    },
+    Stash(StashArgs),
+    #[command(external_subcommand)]
+    External(Vec<std::ffi::OsString>),
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+struct StashArgs {
+    #[command(subcommand)]
+    command: Option<StashCommands>,
+    #[command(flatten)]
+    push: StashPushArgs,
+}
+
+#[derive(Debug, Subcommand)]
+enum StashCommands {
+    Push(StashPushArgs),
+    Pop { stash: Option<String> },
+    Apply { stash: Option<String> },
+}
+
+#[derive(Debug, Args)]
+struct StashPushArgs {
+    #[arg(short, long)]
+    message: Option<String>,
+}
+```
+
+Each variant of `Commands` becomes a subcommand. Struct-like variants hold their arguments as fields; tuple variants delegate to a nested `Args` struct. The `#[command(external_subcommand)]` variant (shown as `External`) captures any unrecognised subcommand name and its arguments as raw `OsString` values.
+
+---
+
+## Reading Subcommand Matches
+
+### Builder API
+
+```rust
+match matches.subcommand() {
+    Some(("clone", sub_matches)) => {
+        println!(
+            "Cloning {}",
+            sub_matches.get_one::<String>("REMOTE").expect("required")
+        );
+    }
+    Some(("add", sub_matches)) => {
+        let paths = sub_matches
+            .get_many::<std::path::PathBuf>("PATH")
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        println!("Adding {paths:?}");
+    }
+    Some((ext, sub_matches)) => {
+        let args = sub_matches
+            .get_many::<std::ffi::OsString>("")
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        println!("Calling out to {ext:?} with {args:?}");
+    }
+    _ => unreachable!(),
+}
+```
+
+### Derive API
+
+With the derive API you match directly on the enum variant — no string matching required:
+
+```rust
+match args.command {
+    Commands::Clone { remote } => println!("Cloning {remote}"),
+    Commands::Add { path } => println!("Adding {path:?}"),
+    Commands::External(args) => {
+        println!("Calling out to {:?} with {:?}", args[0], &args[1..]);
+    }
+    // …
+}
+```
+
+---
+
+## Nested Subcommands
+
+Subcommands can themselves contain subcommands. The `git stash` example below demonstrates a three-level nesting: `git → stash → push/pop/apply`.
+
+```rust
+use clap::{Command, arg};
+
+fn push_args() -> Vec<clap::Arg> {
+    vec![arg!(-m --message <MESSAGE>)]
+}
+
+fn cli() -> Command {
+    Command::new("git")
+        .subcommand(
+            Command::new("stash")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .args(push_args())
+                .subcommand(Command::new("push").args(push_args()))
+                .subcommand(Command::new("pop").arg(arg!([STASH])))
+                .subcommand(Command::new("apply").arg(arg!([STASH]))),
+        )
+}
+```
+
+Matching nested subcommands follows the same `subcommand()` pattern recursively:
+
+```rust
+Some(("stash", sub_matches)) => {
+    let stash_command = sub_matches.subcommand().unwrap_or(("push", sub_matches));
+    match stash_command {
+        ("push", sub_matches) => {
+            let message = sub_matches.get_one::<String>("message");
+            println!("Pushing {message:?}");
+        }
+        ("pop", sub_matches) => {
+            let stash = sub_matches.get_one::<String>("STASH");
+            println!("Popping {stash:?}");
+        }
+        (name, _) => unreachable!("Unsupported subcommand `{name}`"),
+    }
+}
+```
+
+<Tip>
+  `flatten_help(true)` merges the subcommand's help into the parent's `--help` output, which is handy for commands like `stash` that default to a `push` action.
+</Tip>
+
+---
+
+## External Subcommands
+
+`allow_external_subcommands(true)` tells clap to treat any unrecognised argument as a subcommand name and capture everything that follows into the `ArgMatches` under the empty key `""`.
+
+```rust
+use clap::{Command, arg};
+
+fn cli() -> Command {
+    Command::new("git")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .allow_external_subcommands(true)
+        .subcommand(
+            Command::new("clone")
+                .about("Clones repos")
+                .arg(arg!(<REMOTE> "The remote to clone"))
+                .arg_required_else_help(true),
+        )
+        // … other subcommands …
+}
+```
+
+The external catch-all branch looks like:
+
+```rust
+Some((ext, sub_matches)) => {
+    let args = sub_matches
+        .get_many::<std::ffi::OsString>("")
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    println!("Calling out to {ext:?} with {args:?}");
+}
+```
+
+In the derive API, mark one variant with `#[command(external_subcommand)]`:
+
+```rust
+#[derive(Debug, Subcommand)]
+enum Commands {
+    // … named variants …
+    #[command(external_subcommand)]
+    External(Vec<std::ffi::OsString>),
+}
+```
+
+<Warning>
+  External subcommand values default to `OsString`. If you only need valid UTF-8, use `Command::external_subcommand_value_parser(clap::value_parser!(String))` to get `String` values instead.
+</Warning>
+
+---
+
+## Multicall Binaries (BusyBox Pattern)
+
+`Command::multicall(true)` enables the *multicall* pattern popularised by BusyBox: a single binary registered under multiple symlinks dispatches to different subcommands depending on `argv[0]`.
+
+```rust
+use clap::Command;
+
+fn applet_commands() -> [Command; 2] {
+    [Command::new("true"), Command::new("false")]
+}
+
+let mut cmd = Command::new("busybox")
+    .multicall(true)
+    .subcommand(
+        Command::new("busybox")
+            .subcommand_value_name("APPLET")
+            .subcommand_help_heading("APPLETS")
+            .subcommands(applet_commands()),
+    )
+    .subcommands(applet_commands());
+
+// Running as "busybox true" dispatches to the "true" applet
+let m = cmd.try_get_matches_from_mut(&["/usr/bin/busybox", "true"]).unwrap();
+assert_eq!(m.subcommand_name(), Some("busybox"));
+assert_eq!(m.subcommand().unwrap().1.subcommand_name(), Some("true"));
+
+// Running via a symlink named "true" dispatches directly
+let m = cmd.get_matches_from(&["/usr/bin/true"]);
+assert_eq!(m.subcommand_name(), Some("true"));
+```
+
+<Note>
+  `multicall` and `no_binary_name` are mutually exclusive — they interpret `argv[0]` in incompatible ways. The multicall root command cannot have its own arguments.
+</Note>
+
+---
+
+## Useful Subcommand Settings
+
+| Method | Effect |
+|---|---|
+| `subcommand_required(true)` | Error if no subcommand is provided |
+| `arg_required_else_help(true)` | Print help instead of an error when no args/subcommand is given |
+| `propagate_version(true)` | Share the root `--version` flag with all subcommands |
+| `args_conflicts_with_subcommands(true)` | Root-level args conflict with any subcommand |
+| `flatten_help(true)` | Merge subcommand help into the parent's help output |
+| `subcommand_value_name("APPLET")` | Override the `COMMAND` placeholder in usage lines |
+| `subcommand_help_heading("APPLETS")` | Override the `Commands:` section heading in help |

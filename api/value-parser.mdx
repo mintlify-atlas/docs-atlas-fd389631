@@ -1,0 +1,395 @@
+---
+title: "ValueParser and Built-in Argument Parsers Reference"
+sidebarTitle: "ValueParser"
+description: "Complete reference for clap's ValueParser, value_parser! macro, TypedValueParser trait, built-in parsers, ranged parsers, and EnumValueParser."
+---
+
+`ValueParser` is the type-erased wrapper that clap uses internally to convert raw `OsStr` argument values into typed Rust values. Every argument carries a `ValueParser`; when you call `Arg::value_parser(...)`, you are supplying the strategy clap will use to validate and transform the user's input. The `value_parser!()` macro selects the right implementation automatically for most standard types.
+
+## `ValueParser`
+
+```rust
+pub struct ValueParser(ValueParserInner);
+```
+
+`ValueParser` erases the concrete parser type so clap can store heterogeneous parsers in a uniform collection. Create one via `ValueParser::new(p)` from any `TypedValueParser`, or use the shorthand constructors for the most common types.
+
+### Shorthand Constructors
+
+<ParamField path="ValueParser::bool()" type="const fn() -> ValueParser">
+  Parses `"true"` and `"false"` (case-sensitive). Rejects any other string.
+
+  ```rust
+  pub const fn bool() -> Self
+  ```
+
+  ```rust
+  Arg::new("flag").value_parser(clap::value_parser!(bool))
+  ```
+</ParamField>
+
+<ParamField path="ValueParser::string()" type="const fn() -> ValueParser">
+  Accepts any UTF-8 string, failing on invalid UTF-8 bytes.
+
+  ```rust
+  pub const fn string() -> Self
+  ```
+</ParamField>
+
+<ParamField path="ValueParser::os_string()" type="const fn() -> ValueParser">
+  Accepts any `OsString`, including non-UTF-8 bytes on Unix.
+
+  ```rust
+  pub const fn os_string() -> Self
+  ```
+</ParamField>
+
+<ParamField path="ValueParser::path_buf()" type="const fn() -> ValueParser">
+  Accepts any non-empty path, returning a `PathBuf`. Rejects empty strings.
+
+  ```rust
+  pub const fn path_buf() -> Self
+  ```
+</ParamField>
+
+<ParamField path="ValueParser::new(other)" type="fn(other: P) -> ValueParser">
+  Wraps any `TypedValueParser` implementation in a `ValueParser`.
+
+  ```rust
+  pub fn new<P: TypedValueParser>(other: P) -> Self
+  ```
+
+  ```rust
+  Arg::new("env")
+      .value_parser(ValueParser::new(parse_env_var))
+  ```
+</ParamField>
+
+---
+
+## `value_parser!()` Macro
+
+The `value_parser!()` macro selects the appropriate `ValueParser` implementation for a given type at compile time. It works for all standard numeric types, `bool`, `String`, `OsString`, `PathBuf`, and any type that implements `ValueEnum` or has a `ValueParserFactory` implementation.
+
+```rust
+// Numeric types
+#[arg(value_parser = clap::value_parser!(u16))]
+port: u16,
+
+// With a range constraint
+#[arg(value_parser = clap::value_parser!(u16).range(1..))]
+port: u16,
+
+// Enum types (requires ValueEnum)
+#[arg(value_parser = clap::value_parser!(Mode))]
+mode: Mode,
+```
+
+When used in a derive context, clap calls `value_parser!()` automatically based on the field's type, so you rarely need to write it explicitly.
+
+```rust
+#[derive(Parser)]
+struct Cli {
+    /// Network port to use
+    #[arg(value_parser = clap::value_parser!(u16).range(1..))]
+    port: u16,
+}
+```
+
+---
+
+## `TypedValueParser` Trait
+
+`TypedValueParser` is the base trait for all concrete parser types. Implement it to create custom parsers that validate and transform argument strings into any Rust type.
+
+```rust
+pub trait TypedValueParser: Clone + Send + Sync + 'static {
+    type Value: Send + Sync + Clone;
+
+    fn parse_ref(
+        &self,
+        cmd: &Command,
+        arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, Error>;
+}
+```
+
+<ParamField path="parse_ref" type="fn(&self, cmd, arg, value) -> Result<Value, Error>">
+  Core parsing method. `arg` is `None` when parsing external subcommand values.
+
+  ```rust
+  fn parse_ref(
+      &self,
+      cmd: &crate::Command,
+      arg: Option<&crate::Arg>,
+      value: &std::ffi::OsStr,
+  ) -> Result<Self::Value, crate::Error>
+  ```
+</ParamField>
+
+<ParamField path="possible_values" type="fn(&self) -> Option<Box<dyn Iterator<Item = PossibleValue>>>">
+  Returns an iterator over valid values, used to populate help output. Return `None` (the default) for open-ended parsers.
+
+  ```rust
+  fn possible_values(
+      &self,
+  ) -> Option<Box<dyn Iterator<Item = crate::builder::PossibleValue> + '_>>
+  ```
+</ParamField>
+
+<ParamField path="map" type="fn(self, func: F) -> MapValueParser">
+  Adapts this parser's output type using an infallible mapping function.
+
+  ```rust
+  fn map<T, F>(self, func: F) -> MapValueParser<Self, F>
+  where
+      T: Send + Sync + Clone,
+      F: Fn(Self::Value) -> T + Clone,
+  ```
+
+  ```rust
+  use clap::builder::{BoolishValueParser, TypedValueParser as _};
+
+  Arg::new("flag")
+      .action(clap::ArgAction::SetTrue)
+      .value_parser(
+          BoolishValueParser::new().map(|b| -> usize { if b { 10 } else { 5 } })
+      )
+  ```
+</ParamField>
+
+<ParamField path="try_map" type="fn(self, func: F) -> TryMapValueParser">
+  Adapts this parser's output type using a fallible mapping function. Errors are converted to `ValueValidation` errors.
+
+  ```rust
+  fn try_map<T, E, F>(self, func: F) -> TryMapValueParser<Self, F>
+  where
+      F: Fn(Self::Value) -> Result<T, E> + Clone + Send + Sync + 'static,
+      T: Send + Sync + Clone,
+      E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+  ```
+
+  ```rust
+  use clap::builder::{OsStringValueParser, TypedValueParser as _};
+
+  fn verify_ext(os: std::ffi::OsString) -> Result<std::path::PathBuf, &'static str> {
+      let path = std::path::PathBuf::from(os);
+      if path.extension() != Some(std::ffi::OsStr::new("rs")) {
+          return Err("only Rust files are supported");
+      }
+      Ok(path)
+  }
+
+  Arg::new("file")
+      .value_parser(OsStringValueParser::new().try_map(verify_ext))
+  ```
+</ParamField>
+
+A plain `Fn(&str) -> Result<T, E>` closure also implements `TypedValueParser`, so you can pass a function directly to `Arg::value_parser`:
+
+```rust
+fn parse_port(s: &str) -> Result<u16, String> {
+    s.parse::<u16>().map_err(|e| e.to_string())
+}
+
+Arg::new("port").value_parser(parse_port)
+```
+
+---
+
+## Built-in Parsers
+
+### `StringValueParser`
+
+Parses UTF-8 strings. Fails on non-UTF-8 input.
+
+```rust
+pub struct StringValueParser {}
+impl StringValueParser {
+    pub fn new() -> Self
+}
+```
+
+```rust
+Arg::new("name").value_parser(clap::builder::StringValueParser::new())
+```
+
+### `OsStringValueParser`
+
+Accepts any `OsString`, including non-UTF-8 sequences on Unix platforms.
+
+```rust
+pub struct OsStringValueParser {}
+impl OsStringValueParser {
+    pub fn new() -> Self
+}
+```
+
+### `PathBufValueParser`
+
+Parses `OsString` into `PathBuf`. Rejects empty strings.
+
+```rust
+pub struct PathBufValueParser {}
+impl PathBufValueParser {
+    pub fn new() -> Self
+}
+```
+
+### `BoolValueParser`
+
+Strict boolean parser. Accepts `"true"` and `"false"` only.
+
+```rust
+// Available via ValueParser::bool() or value_parser!(bool)
+```
+
+### `BoolishValueParser`
+
+Lenient boolean parser that accepts common human-readable representations: `"yes"`, `"y"`, `"on"`, `"1"`, `"true"` as truthy; `"no"`, `"n"`, `"off"`, `"0"`, `"false"` as falsy.
+
+```rust
+Arg::new("verbose")
+    .value_parser(clap::builder::BoolishValueParser::new())
+```
+
+### `FalseyValueParser`
+
+Interprets only `"false"`, `"0"`, `"off"`, `"no"`, and `"n"` as `false`; any other non-empty string is treated as `true`.
+
+```rust
+Arg::new("enable")
+    .value_parser(clap::builder::FalseyValueParser::new())
+```
+
+### `NonEmptyStringValueParser`
+
+Parses UTF-8 strings and rejects the empty string with a `ValueValidation` error.
+
+```rust
+Arg::new("hostname")
+    .value_parser(clap::builder::NonEmptyStringValueParser::new())
+```
+
+---
+
+## Ranged Parsers
+
+### `RangedI64ValueParser`
+
+Parses signed 64-bit integers and validates they fall within an optional range. The output type `T` can be any integer type that fits within `i64`.
+
+```rust
+pub struct RangedI64ValueParser<T: TryFrom<i64> = i64> { /* ... */ }
+impl<T: TryFrom<i64> + Clone + Send + Sync> RangedI64ValueParser<T> {
+    pub fn new() -> Self
+    pub fn range<B: RangeBounds<i64>>(self, range: B) -> Self
+}
+```
+
+```rust
+// Accept i64 values in 1..=65535
+#[arg(value_parser = clap::value_parser!(i64).range(1..=65535))]
+port: i64,
+
+// Accept u16 values (automatically ranged to 0..=65535)
+#[arg(value_parser = clap::value_parser!(u16))]
+port: u16,
+```
+
+Range literals can also be passed directly to `Arg::value_parser`:
+
+```rust
+Arg::new("port")
+    .long("port")
+    .value_parser(3000..4000)   // i64 range
+```
+
+### `RangedU64ValueParser`
+
+Parses unsigned 64-bit integers with optional range validation.
+
+```rust
+pub struct RangedU64ValueParser<T: TryFrom<u64> = u64> { /* ... */ }
+impl<T: TryFrom<u64> + Clone + Send + Sync> RangedU64ValueParser<T> {
+    pub fn new() -> Self
+    pub fn range<B: RangeBounds<u64>>(self, range: B) -> Self
+}
+```
+
+---
+
+## `PossibleValuesParser`
+
+Validates that an argument value is one of a fixed set of strings. Unlike `EnumValueParser`, this operates on raw strings and does not require a `ValueEnum` implementation.
+
+```rust
+Arg::new("color")
+    .value_parser(clap::builder::PossibleValuesParser::new(["always", "auto", "never"]))
+```
+
+You can also pass an array or `Vec` directly to `Arg::value_parser` — clap converts it automatically:
+
+```rust
+Arg::new("color")
+    .long("color")
+    .value_parser(["always", "auto", "never"])
+    .default_value("auto")
+```
+
+---
+
+## `EnumValueParser`
+
+Parses strings into a `ValueEnum` type by matching against all non-skipped variants. Respects `Arg::ignore_case`.
+
+```rust
+pub struct EnumValueParser<E: ValueEnum + Clone + Send + Sync + 'static>(PhantomData<E>);
+
+impl<E: ValueEnum + Clone + Send + Sync + 'static> EnumValueParser<E> {
+    pub fn new() -> Self
+}
+```
+
+```rust
+use clap::builder::EnumValueParser;
+
+Arg::new("color")
+    .value_parser(EnumValueParser::<ColorChoice>::new())
+```
+
+`value_parser!(T)` resolves to `EnumValueParser::<T>::new()` automatically for any type that implements `ValueEnum`.
+
+---
+
+## `MapValueParser` and `TryMapValueParser`
+
+These adapters are created by calling `.map()` or `.try_map()` on any `TypedValueParser`. They transform the parsed value using a closure.
+
+```rust
+// MapValueParser: infallible transformation
+BoolishValueParser::new().map(|b| -> usize { if b { 10 } else { 5 } })
+
+// TryMapValueParser: fallible transformation
+OsStringValueParser::new().try_map(|os| {
+    let path = std::path::PathBuf::from(os);
+    if path.exists() { Ok(path) } else { Err("path does not exist") }
+})
+```
+
+---
+
+## `ValueParserFactory`
+
+`ValueParserFactory` is an auto-impl trait that lets clap's `value_parser!()` macro resolve a `ValueParser` for a given type. Standard types have built-in implementations; for custom types, implement `ValueParserFactory` or derive `ValueEnum`.
+
+```rust
+// Standard resolutions via value_parser!():
+// bool    → ValueParser::bool()
+// String  → ValueParser::string()
+// OsString → ValueParser::os_string()
+// PathBuf → ValueParser::path_buf()
+// u8..u128, i8..i128 → RangedI64/U64ValueParser
+// T: ValueEnum → EnumValueParser::<T>::new()
+```

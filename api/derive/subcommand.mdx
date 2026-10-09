@@ -1,0 +1,378 @@
+---
+title: "Subcommand Derive Trait: Enum-Based CLI Subcommands"
+sidebarTitle: "Subcommand"
+description: "Reference for clap's Subcommand derive trait — enum variants, external subcommands, augment_subcommands for builder interop, and manual implementation."
+---
+
+The `Subcommand` trait maps each variant of an enum to a distinct subcommand registered under a parent `Command`. Deriving it on an enum gives you a strongly typed representation of whichever subcommand the user invoked, complete with that subcommand's own arguments parsed into the variant's fields or an associated `Args` struct.
+
+## Overview
+
+Declare a `Subcommand` enum and reference it from a `Parser` struct using `#[command(subcommand)]`. Each variant becomes a subcommand whose name is derived from the variant name (kebab-cased by default). Variants can carry inline fields, reference an external `Args` struct, or capture unknown subcommands.
+
+```rust
+use clap::{Parser, Subcommand};
+
+#[derive(Debug, Parser)]
+#[command(name = "git")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Clones repos
+    #[command(arg_required_else_help = true)]
+    Clone {
+        /// The remote to clone
+        remote: String,
+    },
+    /// Pushes things
+    #[command(arg_required_else_help = true)]
+    Push {
+        /// The remote to target
+        remote: String,
+    },
+}
+```
+
+---
+
+## The `Subcommand` Trait
+
+```rust
+pub trait Subcommand: FromArgMatches + Sized {
+    fn augment_subcommands(cmd: Command) -> Command;
+    fn augment_subcommands_for_update(cmd: Command) -> Command;
+    fn has_subcommand(name: &str) -> bool;
+}
+```
+
+<ParamField path="augment_subcommands" type="fn(cmd: Command) -> Command">
+  Appends all variants as subcommands on `cmd`. Used when mixing derived subcommands into a builder-based `Command`.
+
+  ```rust
+  fn augment_subcommands(cmd: Command) -> Command
+  ```
+
+  ```rust
+  use clap::{Command, FromArgMatches as _, Parser, Subcommand as _};
+
+  #[derive(Parser, Debug)]
+  enum Subcommands {
+      Derived {
+          #[arg(short, long)]
+          derived_flag: bool,
+      },
+  }
+
+  let cli = Command::new("Built CLI");
+  let cli = Subcommands::augment_subcommands(cli);
+
+  let matches = cli.get_matches();
+  let derived = Subcommands::from_arg_matches(&matches)
+      .map_err(|err| err.exit())
+      .unwrap();
+  println!("{derived:#?}");
+  ```
+</ParamField>
+
+<ParamField path="augment_subcommands_for_update" type="fn(cmd: Command) -> Command">
+  Like `augment_subcommands`, but registers subcommands suited for the update flow where existing values may already be populated.
+
+  ```rust
+  fn augment_subcommands_for_update(cmd: Command) -> Command
+  ```
+</ParamField>
+
+<ParamField path="has_subcommand" type="fn(name: &str) -> bool">
+  Returns `true` if `name` matches any subcommand registered by `Self`. Used for runtime dispatching and validation.
+
+  ```rust
+  fn has_subcommand(name: &str) -> bool
+  ```
+</ParamField>
+
+---
+
+## Variant Kinds
+
+### Struct Variants (Inline Fields)
+
+Fields defined directly on the variant become arguments for that subcommand:
+
+```rust
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Compare two commits
+    Diff {
+        #[arg(value_name = "COMMIT")]
+        base: Option<std::ffi::OsString>,
+        #[arg(value_name = "COMMIT")]
+        head: Option<std::ffi::OsString>,
+        #[arg(last = true)]
+        path: Option<std::ffi::OsString>,
+    },
+}
+```
+
+### Tuple Variants (Delegating to an `Args` Struct)
+
+A tuple variant wrapping a type that implements `Args` delegates all argument parsing to that struct:
+
+```rust
+use clap::{Args, Subcommand};
+
+#[derive(Args, Debug)]
+struct StashPushArgs {
+    #[arg(short, long)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum StashCommands {
+    Push(StashPushArgs),
+    Pop { stash: Option<String> },
+    Apply { stash: Option<String> },
+}
+```
+
+### External Subcommands
+
+Use `#[command(external_subcommand)]` on a variant to capture any unrecognised subcommand name and its arguments as a `Vec<String>` or `Vec<OsString>`:
+
+```rust
+#[derive(Debug, Subcommand)]
+enum Commands {
+    // ... named subcommands ...
+    #[command(external_subcommand)]
+    External(Vec<std::ffi::OsString>),
+}
+```
+
+When an unrecognised subcommand is encountered, clap populates this variant with the subcommand name as the first element followed by all remaining arguments. This is the standard pattern for implementing git-style aliases and plugin dispatch.
+
+```rust
+// Dispatch to an external binary or handle the alias
+match args.command {
+    Commands::External(args) => {
+        println!("Calling out to {:?} with {:?}", args[0], &args[1..]);
+    }
+    // ...
+}
+```
+
+---
+
+## `#[command(...)]` on Variants
+
+These attributes configure the subcommand `Command` generated for a variant:
+
+| Attribute | Effect |
+|-----------|--------|
+| `name = "..."` | Override the subcommand name (defaults to kebab-cased variant name) |
+| `about = "..."` | Short description; defaults to doc comment summary |
+| `arg_required_else_help = true` | Print help if the subcommand is invoked with no arguments |
+| `flatten` | Delegate to the variant for additional subcommands (variant type must impl `Subcommand`) |
+| `subcommand` | Nest subcommands under the current set (variant type must impl `Subcommand`) |
+| `skip` | Exclude this variant from the generated subcommand list |
+| `external_subcommand` | Capture unknown subcommands; variant must be `Variant(Vec<String>)` or `Variant(Vec<OsString>)` |
+| `rename_all = "..."` | Override case conversion for field names within this variant |
+
+---
+
+## Nested Subcommands
+
+Nest a `Subcommand` inside an `Args` struct to create multi-level command hierarchies:
+
+```rust
+use clap::{Args, Subcommand};
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+#[command(flatten_help = true)]
+struct StashArgs {
+    #[command(subcommand)]
+    command: Option<StashCommands>,
+
+    #[command(flatten)]
+    push: StashPushArgs,
+}
+
+#[derive(Debug, Subcommand)]
+enum StashCommands {
+    Push(StashPushArgs),
+    Pop { stash: Option<String> },
+    Apply { stash: Option<String> },
+}
+```
+
+---
+
+## Manual Implementation
+
+Implement `Subcommand` by hand to mix builder-defined subcommands into a derive-based parser:
+
+```rust
+use clap::error::{Error, ErrorKind};
+use clap::{ArgMatches, Args as _, Command, FromArgMatches, Parser, Subcommand};
+
+#[derive(Parser, Debug)]
+struct AddArgs {
+    name: Vec<String>,
+}
+
+#[derive(Parser, Debug)]
+struct RemoveArgs {
+    #[arg(short, long)]
+    force: bool,
+    name: Vec<String>,
+}
+
+#[derive(Debug)]
+enum CliSub {
+    Add(AddArgs),
+    Remove(RemoveArgs),
+}
+
+impl FromArgMatches for CliSub {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, Error> {
+        match matches.subcommand() {
+            Some(("add", args)) => Ok(Self::Add(AddArgs::from_arg_matches(args)?)),
+            Some(("remove", args)) => Ok(Self::Remove(RemoveArgs::from_arg_matches(args)?)),
+            Some((_, _)) => Err(Error::raw(
+                ErrorKind::InvalidSubcommand,
+                "Valid subcommands are `add` and `remove`",
+            )),
+            None => Err(Error::raw(
+                ErrorKind::MissingSubcommand,
+                "Valid subcommands are `add` and `remove`",
+            )),
+        }
+    }
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), Error> {
+        match matches.subcommand() {
+            Some(("add", args)) => *self = Self::Add(AddArgs::from_arg_matches(args)?),
+            Some(("remove", args)) => *self = Self::Remove(RemoveArgs::from_arg_matches(args)?),
+            _ => {}
+        };
+        Ok(())
+    }
+}
+
+impl Subcommand for CliSub {
+    fn augment_subcommands(cmd: Command) -> Command {
+        cmd.subcommand(AddArgs::augment_args(Command::new("add")))
+            .subcommand(RemoveArgs::augment_args(Command::new("remove")))
+            .subcommand_required(true)
+    }
+    fn augment_subcommands_for_update(cmd: Command) -> Command {
+        Self::augment_subcommands(cmd)
+    }
+    fn has_subcommand(name: &str) -> bool {
+        matches!(name, "add" | "remove")
+    }
+}
+
+#[derive(Parser, Debug)]
+struct Cli {
+    #[arg(short, long)]
+    top_level: bool,
+    #[command(subcommand)]
+    subcommand: CliSub,
+}
+```
+
+---
+
+## Full Git-Style Example
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+    use clap::{Args, Parser, Subcommand, ValueEnum};
+
+    #[derive(Debug, Parser)]
+    #[command(name = "git", about = "A fictional versioning CLI")]
+    struct Cli {
+        #[command(subcommand)]
+        command: Commands,
+    }
+
+    #[derive(Debug, Subcommand)]
+    enum Commands {
+        #[command(arg_required_else_help = true)]
+        Clone { remote: String },
+        #[command(arg_required_else_help = true)]
+        Push { remote: String },
+        #[command(arg_required_else_help = true)]
+        Add {
+            #[arg(required = true)]
+            path: Vec<PathBuf>,
+        },
+        Stash(StashArgs),
+        #[command(external_subcommand)]
+        External(Vec<OsString>),
+    }
+
+    #[derive(Debug, Args)]
+    #[command(args_conflicts_with_subcommands = true)]
+    struct StashArgs {
+        #[command(subcommand)]
+        command: Option<StashCommands>,
+        #[command(flatten)]
+        push: StashPushArgs,
+    }
+
+    #[derive(Debug, Subcommand)]
+    enum StashCommands {
+        Push(StashPushArgs),
+        Pop { stash: Option<String> },
+        Apply { stash: Option<String> },
+    }
+
+    #[derive(Debug, Args)]
+    struct StashPushArgs {
+        #[arg(short, long)]
+        message: Option<String>,
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Command, Arg, ArgAction};
+
+    fn main() {
+        let matches = Command::new("git")
+            .about("A fictional versioning CLI")
+            .subcommand_required(true)
+            .subcommand(
+                Command::new("clone")
+                    .about("Clones repos")
+                    .arg(Arg::new("remote").required(true)),
+            )
+            .subcommand(
+                Command::new("push")
+                    .about("Pushes things")
+                    .arg(Arg::new("remote").required(true)),
+            )
+            .get_matches();
+
+        match matches.subcommand() {
+            Some(("clone", sub)) => {
+                let remote = sub.get_one::<String>("remote").unwrap();
+                println!("Cloning {remote}");
+            }
+            Some(("push", sub)) => {
+                let remote = sub.get_one::<String>("remote").unwrap();
+                println!("Pushing to {remote}");
+            }
+            _ => unreachable!(),
+        }
+    }
+    ```
+  </Tab>
+</Tabs>

@@ -1,0 +1,424 @@
+---
+title: "ArgAction Enum: Clap Argument Behavior and Variants"
+sidebarTitle: "ArgAction"
+description: "Reference for every clap ArgAction variant — Set, Append, SetTrue, SetFalse, Count, Help, HelpShort, HelpLong, and Version — with usage examples."
+---
+
+`ArgAction` controls what clap does each time it encounters an argument during parsing. The right action determines whether a value is stored, appended to a list, treated as a boolean flag, counted, or used to print help or version information. Selecting the correct action is the primary way to declare the intended behaviour of each argument.
+
+```rust
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum ArgAction {
+    Set,
+    Append,
+    SetTrue,
+    SetFalse,
+    Count,
+    Help,
+    HelpShort,
+    HelpLong,
+    Version,
+}
+```
+
+In the derive API, clap infers the action from the field type (for example, `bool` → `SetTrue`, `Vec<T>` → `Append`). You can override this with `#[arg(action = ArgAction::Count)]`. In the builder API, set it explicitly with `Arg::action(ArgAction::...)`.
+
+---
+
+## `ArgAction::Set`
+
+Stores the associated value in `ArgMatches`, replacing any previously stored value. This is the default action for options that accept a value. If an argument that uses `Set` appears twice and `Command::args_override_self` is not enabled, clap returns an `ArgumentConflict` error.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        /// Output file path
+        #[arg(short, long)]
+        output: String,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+        println!("Output: {}", cli.output);
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let matches = Command::new("mycmd")
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .action(ArgAction::Set),
+        )
+        .get_matches();
+
+    let output: &String = matches.get_one("output").unwrap();
+    ```
+  </Tab>
+</Tabs>
+
+**Retrieve with:** `matches.get_one::<T>("id")`
+
+---
+
+## `ArgAction::Append`
+
+Stores each occurrence's value and accumulates all of them. Each time the argument appears on the command line, its value is appended to the list. Use this for arguments that can be specified multiple times.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        /// Include paths (can be repeated)
+        #[arg(short = 'I', long)]
+        include: Vec<String>,
+    }
+    // myapp -I /usr/include -I /usr/local/include
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let matches = Command::new("mycmd")
+        .arg(
+            Arg::new("flag")
+                .long("flag")
+                .action(ArgAction::Append),
+        )
+        .get_matches_from(["mycmd", "--flag", "value1", "--flag", "value2"]);
+
+    let values: Vec<&String> = matches
+        .get_many::<String>("flag")
+        .unwrap_or_default()
+        .collect();
+    assert_eq!(values, ["value1", "value2"]);
+    ```
+  </Tab>
+</Tabs>
+
+**Retrieve with:** `matches.get_many::<T>("id")`
+
+---
+
+## `ArgAction::SetTrue`
+
+When the flag is present, stores `true`. When absent, stores the default value `false` (unless a custom `default_value` is set). Takes no value from the command line — the presence of the flag itself is the signal. If the flag appears twice without `args_override_self`, an `ArgumentConflict` error is returned.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        /// Enable verbose output
+        #[arg(short, long)]
+        verbose: bool,  // bool infers SetTrue
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+        if cli.verbose {
+            println!("Verbose mode on");
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(Arg::new("flag").long("flag").action(ArgAction::SetTrue));
+
+    let matches = cmd.clone().try_get_matches_from(["mycmd", "--flag"]).unwrap();
+    assert_eq!(matches.get_flag("flag"), true);
+
+    let matches = cmd.try_get_matches_from(["mycmd"]).unwrap();
+    assert_eq!(matches.get_flag("flag"), false);
+    ```
+  </Tab>
+</Tabs>
+
+**Retrieve with:** `matches.get_flag("id")` or `matches.get_one::<bool>("id")`
+
+---
+
+## `ArgAction::SetFalse`
+
+The inverse of `SetTrue`. When the flag is present, stores `false`. When absent, stores the default value `true`. Useful for "disable" flags like `--no-color`.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::{ArgAction, Parser};
+
+    #[derive(Parser)]
+    struct Cli {
+        /// Disable color output
+        #[arg(long, action = ArgAction::SetFalse)]
+        no_color: bool,
+    }
+    // Default: no_color = true (color enabled)
+    // --no-color: no_color = false (color disabled)
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(Arg::new("flag").long("flag").action(ArgAction::SetFalse));
+
+    let matches = cmd.clone().try_get_matches_from(["mycmd", "--flag"]).unwrap();
+    assert_eq!(matches.get_flag("flag"), false);
+
+    let matches = cmd.try_get_matches_from(["mycmd"]).unwrap();
+    assert_eq!(matches.get_flag("flag"), true);
+    ```
+  </Tab>
+</Tabs>
+
+**Retrieve with:** `matches.get_flag("id")`
+
+---
+
+## `ArgAction::Count`
+
+Increments a `u8` counter each time the flag is encountered. Starts at `0` by default. Takes no value from the command line. Ideal for verbosity levels: `-v`, `-vv`, `-vvv`.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::{ArgAction, Parser};
+
+    #[derive(Parser)]
+    struct Cli {
+        /// Increase verbosity (use multiple times)
+        #[arg(short, long, action = ArgAction::Count)]
+        verbose: u8,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+        match cli.verbose {
+            0 => println!("Normal output"),
+            1 => println!("Verbose output"),
+            2 => println!("Very verbose output"),
+            _ => println!("Maximum verbosity"),
+        }
+    }
+    // myapp -v        → verbose = 1
+    // myapp -vv       → verbose = 2
+    // myapp -v -v -v  → verbose = 3
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(Arg::new("flag").long("flag").action(ArgAction::Count));
+
+    let matches = cmd
+        .try_get_matches_from(["mycmd", "--flag", "--flag"])
+        .unwrap();
+    assert_eq!(matches.get_count("flag"), 2);
+    ```
+  </Tab>
+</Tabs>
+
+**Retrieve with:** `matches.get_count("id")` (returns `u8`) or `matches.get_one::<u8>("id")`
+
+---
+
+## `ArgAction::Help`
+
+Displays help (short `-h` shows `Command::print_help`, long `--help` shows `Command::print_long_help`) and exits with code `0`. This is the action clap assigns to the auto-generated `-h`/`--help` flags. You can assign it to additional flags to create alias help flags.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    // The built-in -h/--help flags use Help automatically.
+    // To add an additional help flag:
+    use clap::{ArgAction, Parser};
+
+    #[derive(Parser)]
+    struct Cli {
+        /// Show help (alias for -h/--help)
+        #[arg(short = '?', action = ArgAction::Help)]
+        help_alias: Option<bool>,
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(
+            Arg::new("special-help")
+                .short('?')
+                .action(ArgAction::Help),
+        );
+
+    // Both -h and -? now trigger help
+    let err = cmd.try_get_matches_from(["mycmd", "-?"]).unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## `ArgAction::HelpShort`
+
+Always displays the short help message (`Command::print_help`) regardless of which flag triggered it. Useful when you want a flag that unconditionally shows the brief help.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::{ArgAction, Parser};
+
+    #[derive(Parser)]
+    struct Cli {
+        #[arg(short = '?', action = ArgAction::HelpShort)]
+        help_short: Option<bool>,
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(
+            Arg::new("special-help")
+                .short('?')
+                .action(ArgAction::HelpShort),
+        );
+
+    let err = cmd.try_get_matches_from(["mycmd", "-?"]).unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## `ArgAction::HelpLong`
+
+Always displays the long help message (`Command::print_long_help`) regardless of which flag triggered it. Useful for exposing the verbose help via a custom flag.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::{ArgAction, Parser};
+
+    #[derive(Parser)]
+    struct Cli {
+        /// Show detailed help
+        #[arg(long = "detailed-help", action = ArgAction::HelpLong)]
+        help_long: Option<bool>,
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .arg(
+            Arg::new("special-help")
+                .short('?')
+                .action(ArgAction::HelpLong),
+        );
+
+    let err = cmd.try_get_matches_from(["mycmd", "-?"]).unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## `ArgAction::Version`
+
+Displays the version string (short `--version` shows `Command::version`, long form shows `Command::long_version`) and exits with code `0`. This is the action used by the auto-generated `--version` flag. Assign it to a custom flag to create version aliases.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    // The built-in --version flag uses Version automatically.
+    // Enable it with #[command(version)] on the struct.
+    #[derive(Parser)]
+    #[command(version)]
+    struct Cli {
+        #[arg(short, long)]
+        name: String,
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, Command};
+
+    let cmd = Command::new("mycmd")
+        .version("1.0.0")
+        .arg(
+            Arg::new("special-version")
+                .long("special-version")
+                .action(ArgAction::Version),
+        );
+
+    let err = cmd
+        .try_get_matches_from(["mycmd", "--special-version"])
+        .unwrap_err();
+    assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Summary Table
+
+| Variant | Takes Value | Default Value | Retrieve With |
+|---------|-------------|---------------|---------------|
+| `Set` | Yes (1) | None | `get_one::<T>()` |
+| `Append` | Yes (1 per occurrence) | None | `get_many::<T>()` |
+| `SetTrue` | No | `false` | `get_flag()` |
+| `SetFalse` | No | `true` | `get_flag()` |
+| `Count` | No | `0` (`u8`) | `get_count()` |
+| `Help` | No | — | (exits) |
+| `HelpShort` | No | — | (exits) |
+| `HelpLong` | No | — | (exits) |
+| `Version` | No | — | (exits) |
+
+### `takes_values()`
+
+The public `takes_values()` method returns whether a given action consumes a value from the command line:
+
+```rust
+pub fn takes_values(&self) -> bool {
+    match self {
+        Self::Set | Self::Append => true,
+        _ => false,
+    }
+}
+```

@@ -1,0 +1,235 @@
+---
+title: "Changelog: Recent Releases and Breaking Changes"
+sidebarTitle: "Changelog"
+description: "Highlights of recent clap 4.x releases — new features, breaking changes, deprecations, and compatibility notes across minor and patch versions."
+---
+
+clap follows [Semantic Versioning](https://semver.org/) and documents all notable changes in its [CHANGELOG.md](https://github.com/clap-rs/clap/blob/master/CHANGELOG.md). This page highlights the most significant changes across recent releases. For the complete list of every patch fix and internal change, see the full changelog on GitHub.
+
+<Note>
+  The full machine-readable changelog is at
+  [github.com/clap-rs/clap/blob/master/CHANGELOG.md](https://github.com/clap-rs/clap/blob/master/CHANGELOG.md).
+</Note>
+
+---
+
+## 5.0.0 — TBD
+
+Preview features are available today through the `unstable-v5` feature flag in your `Cargo.toml`:
+
+```toml
+clap = { version = "4", features = ["derive", "unstable-v5"] }
+```
+
+### Breaking Changes (Preview)
+
+| Area | Change |
+|---|---|
+| `ArgPredicate` | Made `non_exhaustive` |
+| Help | Default `Command::term_width` changed to "source format" |
+| Help | Default `Command::max_term_width` changed to 100 |
+| Derive | `Vec<Vec<T>>` types now capture occurrences (one `Vec<T>` per occurrence) |
+| Derive | `ValueEnum` variants use the full doc comment (not just the summary) for `PossibleValue::help` |
+| Derive | Default for deferring changed to `#[command(defer = true)]` |
+
+### New Features (Preview)
+
+- **Derive:** Group values by their occurrence with `Vec<Vec<T>>`
+
+---
+
+## 4.6.x
+
+### 4.6.7 — 2026-09-14
+
+**Derive:** Added `#[command(defer = <bool>)]` attribute to opt into lazy initialization of subcommands. This can reduce startup time for applications with many subcommands.
+
+### 4.6.6 — 2026-08-06
+
+**Builder:** Added `Command::get_overridden_usage`.
+
+### 4.6.5 — 2026-07-31
+
+**Help:** Correctly marks which `value_names` are optional when `num_args` is set.
+
+### 4.6.0 — 2026-03-12
+
+**Compatibility:** MSRV updated to **1.85**.
+
+---
+
+## 4.5.x
+
+### 4.5.53 — 2025-11-19
+
+**Builder:** Added `default_values_if` and `default_values_ifs` for conditional multi-value defaults.
+
+### 4.5.50 — 2025-10-20
+
+**API:** `Cow` is now accepted wherever `String` and `&str` are accepted.
+
+### 4.5.47 — 2025-09-02
+
+Added several new trait implementations for unit types, useful for building generic adapters:
+- `impl FromArgMatches for ()`
+- `impl Args for ()`
+- `impl Subcommand for ()`
+- `impl FromArgMatches for Infallible`
+- `impl Subcommand for Infallible`
+
+### 4.5.46 — 2025-08-26
+
+**Builder:** Exposed `StyledStr::push_str` as a public API.
+
+### 4.5.44 — 2025-08-11
+
+**Builder:** Added `Command::mut_subcommands` for modifying all subcommands at once.
+
+### 4.5.41 — 2025-07-09
+
+**Styling:** Added `Styles::context` and `Styles::context_value` to customize the styling of contextual notes in `--help` output, such as `[default: value]` and `[possible values: ...]`.
+
+### 4.5.40 — 2025-06-09
+
+**Macros:** Support for quoted IDs in the `arg!()` macro (e.g., `arg!("check-config": ...)`).
+
+### 4.5.37 — 2025-04-18
+
+**Builder:** Added `ArgMatches::try_clear_id()`.
+
+### 4.5.32 — 2025-03-10
+
+**Builder:** Added `Error::remove`.
+
+### 4.5.31 — 2025-02-24
+
+**Parser:** Added `ValueParserFactory` implementation for `Saturating<T>`, enabling `value_parser!(Saturating<i32>)` and similar.
+
+### 4.5.28 — 2025-02-03
+
+**Derive (Unstable):** Experimental support for full Markdown syntax in doc comments, gated behind `unstable-markdown`.
+
+### 4.5.0 — 2024-02-08
+
+**Compatibility:** MSRV updated to **1.74**.
+
+---
+
+## 4.4.x
+
+### 4.4.8 — 2023-11-10
+
+**Builder:** Added `Command::flatten_help` to enable `git stash -h`-style help for subcommands — shows subcommand help inline in the parent's help output.
+
+### 4.4.11 — 2023-12-04
+
+**Builder:** Added `Command::mut_group` for modifying argument groups after creation.
+
+### 4.4.14 — 2024-01-08
+
+**Parser:** `num_args(0)` is now allowed on options, enabling option arguments that behave like flags for position-tracking.
+
+### 4.4.1 — 2023-08-28
+
+**Styling:** `Command::styles` stabilized. Previously behind `unstable-styles`.
+
+### 4.4.0 — 2023-08-24
+
+**Compatibility:** MSRV updated to **1.70.0**.
+
+---
+
+## 4.3.x
+
+### 4.3.22 — 2023-08-17
+
+**Builder:** Added `UnknownArgumentValueParser` for injecting custom errors to improve the experience when users provide unknown arguments.
+
+### 4.3.21 — 2023-08-08
+
+**Builder:** Exposed `TryMapValueParser` so the type can be named in user code.
+
+### 4.3.20 — 2023-08-08
+
+**Builder:** Added `Command::mut_args` for modifying all arguments at once.
+
+### 4.3.14 — 2023-07-17
+
+**Actions:** Added `ArgAction::HelpShort` and `ArgAction::HelpLong` for explicitly controlling which style of help is shown.
+
+### 4.3.11 — 2023-07-05
+
+**Derive:** Added support for fields wrapped in `num::Wrapping`, `Box`, and `Arc`. Also supports `Box<str>`, `Box<OsStr>`, and `Box<Path>`.
+
+### 4.3.3 — 2023-06-09
+
+**Builder:** Added `Command::defer` for delayed initialization of subcommands, reducing startup times for large applications.
+
+---
+
+## 4.2.x
+
+### 4.2.3 — 2023-04-18
+
+**Styling:** `Command::styles` introduced (behind `unstable-styles`) for theming help and error output. Stabilized in 4.4.1.
+
+### 4.2.0 — 2023-03-28
+
+**Breaking:**
+- Removed `unstable-replace` feature
+- Removed now-stable `unstable-grouped` feature (grouped argument values)
+
+**Features:**
+- `StyledStr` now accepts text styled with ANSI escape codes directly
+- Respects `CLICOLOR` and `CLICOLOR_FORCE` environment variables
+
+---
+
+## 4.1.x
+
+### 4.1.0 — 2023-01-13
+
+**Compatibility:** MSRV updated to **1.64.0**
+
+**Features:**
+- `ArgMatches::get_occurrences` added for grouping argument values by occurrence
+
+**Breaking (error message style):**
+- Moved away from "did you mean" phrasing to tips
+- Error message leading letter is now lowercase
+- For apps that imitate clap's error style: the format changed
+
+---
+
+## 4.0.x
+
+### 4.0.27 — 2022-11-24
+
+- `Arg::value_parser` now accepts `Vec<impl Into<PossibleValue>>`
+- `Display` and `FromStr` implemented for `ColorChoice`
+- Switched from `atty` to `is-terminal`, fixing a soundness issue
+
+---
+
+## MSRV History
+
+| clap Version | Minimum Supported Rust Version |
+|---|---|
+| 4.6.0+ | 1.85 |
+| 4.5.0 – 4.5.x | 1.74 |
+| 4.4.0 – 4.4.x | 1.70 |
+| 4.1.0 – 4.3.x | 1.64 |
+
+---
+
+## Migration Guides
+
+<Tip>
+  If you are migrating from **structopt** to clap 4, see the [structopt
+  migration
+  guide](https://github.com/clap-rs/clap/blob/v3-main/CHANGELOG.md#migrate-structopt).
+  structopt is now in maintenance mode; clap's derive API is its direct
+  successor.
+</Tip>
+
+For the complete record of every change — including all patch-level fixes — see the [full CHANGELOG on GitHub](https://github.com/clap-rs/clap/blob/master/CHANGELOG.md).

@@ -1,0 +1,336 @@
+---
+title: "Output Styling: Colors and Terminal Formatting"
+sidebarTitle: "Styling"
+description: "Reference for clap's Styles API — customize help and error output colors, apply ANSI effects, control ColorChoice, and use the color and wrap_help feature flags."
+---
+
+clap can render help text and error messages with terminal colors and text effects. Styling is entirely opt-in and configurable: you can apply a preset, build your own style from scratch, or disable styling altogether. This page covers the `Styles` struct, its component fields, the underlying `anstyle` types, and the feature flags that govern styling behavior.
+
+<Note>
+  Styling requires the `color` feature flag, which is enabled by default.
+  Without it, `Styles::styled()` falls back to `Styles::plain()`.
+</Note>
+
+---
+
+## Feature Flags
+
+| Feature | Default | Effect |
+|---|---|---|
+| `color` | ✅ Yes | Enables terminal ANSI styling for help and error output |
+| `wrap_help` | ❌ No | Wraps help text to the current terminal width |
+
+Add them to your `Cargo.toml`:
+
+```toml
+[dependencies]
+clap = { version = "4", features = ["derive", "color", "wrap_help"] }
+```
+
+---
+
+## The `Styles` Struct
+
+`Styles` holds the style definitions for every visual component clap renders. It is constructed with a builder pattern and applied to a `Command` via `Command::styles()`.
+
+```rust
+use clap::builder::styling::*;
+
+// clap v3-style yellow/green scheme
+let styles = Styles::styled()
+    .header(AnsiColor::Yellow.on_default())
+    .usage(AnsiColor::Green.on_default())
+    .literal(AnsiColor::Green.on_default())
+    .placeholder(AnsiColor::Green.on_default());
+```
+
+### Constructors
+
+| Method | Description |
+|---|---|
+| `Styles::plain()` | No styling — all components use `Style::new()` (empty) |
+| `Styles::styled()` | Default clap v4 styling (bold/underline headers, red errors, bold literals, green valid, yellow invalid) |
+
+`Styles::styled()` default values (when `color` feature is enabled):
+
+| Component | Default Style |
+|---|---|
+| `header` | Bold + Underline |
+| `error` | Red foreground + Bold |
+| `usage` | Bold + Underline |
+| `literal` | Bold |
+| `placeholder` | _(none)_ |
+| `valid` | Green foreground |
+| `invalid` | Yellow foreground |
+| `context` | _(none)_ |
+| `context_value` | Falls back to `context` style |
+
+---
+
+## Style Components
+
+Each component is set with a builder method and read back with a getter:
+
+### `header`
+
+General heading style — used for section headings like `Options:`, `Arguments:`, and custom `help_heading` values.
+
+```rust
+pub const fn header(mut self, style: Style) -> Self
+pub const fn get_header(&self) -> &Style
+```
+
+### `error`
+
+The "error:" label in error messages.
+
+```rust
+pub const fn error(mut self, style: Style) -> Self
+pub const fn get_error(&self) -> &Style
+```
+
+### `usage`
+
+The "Usage:" heading.
+
+```rust
+pub const fn usage(mut self, style: Style) -> Self
+pub const fn get_usage(&self) -> &Style
+```
+
+### `literal`
+
+Literal command-line syntax tokens, such as `--help` and subcommand names.
+
+```rust
+pub const fn literal(mut self, style: Style) -> Self
+pub const fn get_literal(&self) -> &Style
+```
+
+### `placeholder`
+
+Descriptions within command-line syntax — for example, the `<FILE>` in `--output <FILE>`. Corresponds to `Arg::value_name`.
+
+```rust
+pub const fn placeholder(mut self, style: Style) -> Self
+pub const fn get_placeholder(&self) -> &Style
+```
+
+### `valid`
+
+Used to highlight suggested valid usage in error messages.
+
+```rust
+pub const fn valid(mut self, style: Style) -> Self
+pub const fn get_valid(&self) -> &Style
+```
+
+### `invalid`
+
+Used to highlight invalid usage in error messages.
+
+```rust
+pub const fn invalid(mut self, style: Style) -> Self
+pub const fn get_invalid(&self) -> &Style
+```
+
+### `context`
+
+Highlights contextual notes such as `[default: false]` and `[possible values: ...]`.
+
+```rust
+pub const fn context(mut self, style: Style) -> Self
+pub const fn get_context(&self) -> &Style
+```
+
+### `context_value`
+
+Specializes the style for the value within a context note — e.g., the `false` in `[default: false]`. If not set, falls back to the `context` style.
+
+```rust
+pub const fn context_value(mut self, style: Style) -> Self
+pub const fn get_context_value(&self) -> &Style
+```
+
+---
+
+## Applying Custom Styles
+
+Pass a `Styles` instance to `Command::styles()`:
+
+```rust
+use clap::{Command, builder::styling::*};
+
+let styles = Styles::styled()
+    .header(AnsiColor::Yellow.on_default())
+    .usage(AnsiColor::Green.on_default())
+    .literal(AnsiColor::Green.on_default())
+    .placeholder(AnsiColor::Green.on_default());
+
+let cmd = Command::new("myapp")
+    .styles(styles);
+```
+
+---
+
+## `anstyle` Types
+
+The `styling` module re-exports everything from the [`anstyle`](https://docs.rs/anstyle) crate. The primary types you will use are:
+
+### `Style`
+
+Represents a complete style: foreground color, background color, and text effects.
+
+```rust
+use clap::builder::styling::Style;
+
+// No styling
+let plain = Style::new();
+
+// Bold + red foreground
+let bold_red = Style::new()
+    .bold()
+    .fg_color(Some(Color::Ansi(AnsiColor::Red)));
+
+// Bold + underline (used for headers by default)
+let heading = Style::new().bold().underline();
+```
+
+Key builder methods on `Style`:
+
+| Method | Effect |
+|---|---|
+| `.bold()` | Bold text |
+| `.underline()` | Underline |
+| `.italic()` | Italic |
+| `.fg_color(Some(Color::...))` | Set foreground color |
+| `.bg_color(Some(Color::...))` | Set background color |
+| `.on_default()` | Shorthand for default background (used with `AnsiColor`) |
+
+### `AnsiColor`
+
+The 16 standard ANSI terminal colors:
+
+| Variant | | Variant | |
+|---|---|---|---|
+| `Black` | Dark black | `BrightBlack` | Dark gray |
+| `Red` | Dark red | `BrightRed` | Bright red |
+| `Green` | Dark green | `BrightGreen` | Bright green |
+| `Yellow` | Dark yellow | `BrightYellow` | Bright yellow |
+| `Blue` | Dark blue | `BrightBlue` | Bright blue |
+| `Magenta` | Dark magenta | `BrightMagenta` | Bright magenta |
+| `Cyan` | Dark cyan | `BrightCyan` | Bright cyan |
+| `White` | Light gray | `BrightWhite` | Bright white |
+
+Use `.on_default()` to get a `Style` with the color as foreground and default background:
+
+```rust
+use clap::builder::styling::AnsiColor;
+
+let style = AnsiColor::Yellow.on_default(); // Style with yellow foreground
+```
+
+### `Color`
+
+```rust
+use clap::builder::styling::Color;
+
+// ANSI 16-color palette
+Color::Ansi(AnsiColor::Red)
+
+// 256-color palette
+Color::Ansi256(anstyle::Ansi256Color(196))
+
+// 24-bit RGB
+Color::Rgb(anstyle::RgbColor(255, 0, 0))
+```
+
+### `Effects`
+
+Effects can be composed with `|`:
+
+```rust
+use clap::builder::styling::Effects;
+
+let bold_underline = Effects::BOLD | Effects::UNDERLINE;
+```
+
+---
+
+## `ColorChoice`
+
+`ColorChoice` controls whether clap emits ANSI escape codes at all, regardless of the `Styles` configuration.
+
+| Variant | Behavior |
+|---|---|
+| `Auto` | Detect terminal support; use color if stdout/stderr is a TTY |
+| `Always` | Always emit ANSI codes |
+| `Never` | Never emit ANSI codes |
+
+Set it globally with the `CLICOLOR` / `NO_COLOR` / `CLICOLOR_FORCE` environment variables (standard behavior via `anstream`), or per-command:
+
+```rust
+use clap::{Command, ColorChoice};
+
+let cmd = Command::new("myapp")
+    .color(ColorChoice::Always);
+```
+
+---
+
+## `StyledStr`
+
+`StyledStr` is a terminal-styling container that can hold ANSI-encoded strings. It is used internally by clap's help renderer but can also be used for custom `after_help` / `before_help` content.
+
+```rust
+use clap::Command;
+
+// `cstr!` converts tags to ANSI codes
+let after_help: &'static str = color_print::cstr!(
+r#"<bold><underline>Examples</underline></bold>
+
+  <dim>$</dim> <bold>mybin --input file.toml</bold>
+"#);
+
+let cmd = Command::new("mybin")
+    .after_help(after_help);  // &str is converted into StyledStr
+```
+
+`StyledStr` implements `push_str(&str)` for manual construction:
+
+```rust
+use clap::builder::StyledStr;
+
+let mut s = StyledStr::new();
+s.push_str("hello world");
+```
+
+---
+
+## Full Styling Example
+
+```rust
+use clap::{Command, Arg, builder::styling::*};
+
+fn main() {
+    let styles = Styles::styled()
+        .header(AnsiColor::BrightGreen.on_default() | Effects::BOLD)
+        .usage(AnsiColor::BrightGreen.on_default() | Effects::BOLD)
+        .literal(AnsiColor::BrightCyan.on_default() | Effects::BOLD)
+        .placeholder(AnsiColor::Cyan.on_default())
+        .error(AnsiColor::BrightRed.on_default() | Effects::BOLD)
+        .valid(AnsiColor::BrightGreen.on_default())
+        .invalid(AnsiColor::BrightRed.on_default());
+
+    let cmd = Command::new("myapp")
+        .styles(styles)
+        .about("A colorful CLI application")
+        .arg(Arg::new("name").help("Your name").required(true));
+}
+```
+
+<Tip>
+  For help text that preserves formatting across terminals without requiring
+  color support, use `color_print::cstr!` to embed ANSI codes in string
+  literals. clap will strip them automatically when color is disabled.
+</Tip>

@@ -1,0 +1,426 @@
+---
+title: "clap::Command — CLI Application Builder Reference"
+sidebarTitle: "Command"
+description: "Complete reference for clap::Command in Rust. Build CLIs with arguments, subcommands, metadata, and custom parsing behavior using the fluent builder API."
+---
+
+`Command` is the central type in clap's builder API. It represents a command-line application or a subcommand within one, and provides a fluent interface for declaring arguments, subcommands, metadata, and parsing behavior. Every clap-based CLI starts by constructing a `Command`, configuring it with method chaining, and then calling one of the parsing methods to obtain an `ArgMatches`.
+
+---
+
+## Construction
+
+<ParamField path="Command::new" type="fn(name: impl Into<Str>) -> Self">
+  Creates a new `Command` with the given name. The name is used in help text, error messages, and to identify the subcommand when nested under a parent command.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp");
+  ```
+</ParamField>
+
+<ParamField path="command!()" type="macro">
+  A convenience macro that creates a `Command` pre-populated with metadata from your crate's `Cargo.toml` (name, version, authors, and description). Requires the `cargo` feature, which is enabled by default.
+
+  ```rust
+  use clap::command;
+
+  let cmd = command!(); // name, version, author, about from Cargo.toml
+  ```
+</ParamField>
+
+---
+
+## Metadata
+
+<ParamField path="name" type="fn(self, name: impl Into<Str>) -> Self">
+  Overrides the command name set during construction. Useful when the binary name differs from the desired display name, or when building a subcommand whose name should differ from a Rust identifier.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("my-tool")
+      .name("mytool");
+  ```
+</ParamField>
+
+<ParamField path="version" type="fn(self, ver: impl IntoResettable<Str>) -> Self">
+  Sets the version string shown when the user passes `-V` or `--version`. Use the `crate_version!()` macro to pull the version directly from `Cargo.toml`.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .version("1.2.3");
+  ```
+</ParamField>
+
+<ParamField path="author" type="fn(self, author: impl IntoResettable<Str>) -> Self">
+  Sets the author string included in the long help output. Typically formatted as `"Name <email>"`. Use `crate_authors!()` to pull from `Cargo.toml`.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .author("Alice <alice@example.com>");
+  ```
+</ParamField>
+
+<ParamField path="about" type="fn(self, about: impl IntoResettable<StyledStr>) -> Self">
+  Sets the short description shown in `-h` help output. If `long_about` is not set, this text is also used for `--help`.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .about("A fast data processing tool");
+  ```
+</ParamField>
+
+<ParamField path="long_about" type="fn(self, long_about: impl IntoResettable<StyledStr>) -> Self">
+  Sets a longer description used only in `--help` output. Ideal for multi-line explanations, caveats, or extended usage notes.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .about("A fast data processing tool")
+      .long_about(
+          "A fast data processing tool.\n\n\
+           Supports CSV, JSON, and Parquet formats. \
+           Pass --help to any subcommand for details."
+      );
+  ```
+</ParamField>
+
+---
+
+## Arguments
+
+<ParamField path="arg" type="fn(self, a: impl Into<Arg>) -> Self">
+  Adds a single argument to the command. Accepts either an `Arg` builder or an `arg!()` macro expression.
+
+  ```rust
+  use clap::{Command, Arg, arg};
+
+  let cmd = Command::new("myprog")
+      .arg(
+          Arg::new("debug")
+              .short('d')
+              .help("Enable debug logging")
+      )
+      .arg(arg!(-c --config <FILE> "Path to config file").required(false));
+  ```
+</ParamField>
+
+<ParamField path="args" type="fn(self, args: impl IntoIterator<Item = impl Into<Arg>>) -> Self">
+  Adds multiple arguments at once. Useful when constructing argument lists programmatically or sharing argument definitions between commands.
+
+  ```rust
+  use clap::{Command, arg, Arg};
+
+  fn common_args() -> Vec<clap::Arg> {
+      vec![
+          arg!(-d --debug "Turn debugging on"),
+          Arg::new("input").help("Input file"),
+      ]
+  }
+
+  let cmd = Command::new("myprog")
+      .args(common_args());
+  ```
+</ParamField>
+
+---
+
+## Subcommands
+
+<ParamField path="subcommand" type="fn(self, subcmd: impl Into<Self>) -> Self">
+  Adds a nested `Command` as a subcommand. The subcommand is identified by its name and receives its own set of arguments and matches.
+
+  ```rust
+  use clap::{Command, arg};
+
+  let cmd = Command::new("git")
+      .subcommand(
+          Command::new("clone")
+              .about("Clone a repository")
+              .arg(arg!(<URL> "Repository URL"))
+      );
+  ```
+</ParamField>
+
+<ParamField path="subcommand_required" type="fn(self, yes: bool) -> Self">
+  When set to `true`, the parser returns an error if no subcommand is provided. Combine with `arg_required_else_help(true)` to print help instead of an error when the program is invoked with no arguments.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("git")
+      .subcommand_required(true)
+      .arg_required_else_help(true);
+  ```
+</ParamField>
+
+<ParamField path="arg_required_else_help" type="fn(self, yes: bool) -> Self">
+  Prints help and exits if no arguments or subcommands are provided. A convenient alternative to `subcommand_required` when you want a friendly message rather than an error.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .arg_required_else_help(true);
+  ```
+</ParamField>
+
+<ParamField path="allow_external_subcommands" type="fn(self, yes: bool) -> Self">
+  Allows subcommand names that are not explicitly registered. The external subcommand's name and any trailing arguments are captured and available via `ArgMatches::subcommand()`. The trailing arguments are stored under the empty string `""` id.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myprog")
+      .allow_external_subcommands(true);
+  ```
+</ParamField>
+
+---
+
+## Behavior
+
+<ParamField path="next_line_help" type="fn(self, yes: bool) -> Self">
+  When enabled, help text for arguments is placed on the line after the argument's usage string rather than aligned in a trailing column. Useful for long argument names or when terminal width is constrained.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .next_line_help(true);
+  ```
+</ParamField>
+
+<ParamField path="hide" type="fn(self, yes: bool) -> Self">
+  Hides this (sub)command from help output. The command still functions normally — it simply won't appear in the generated help text. Useful for aliases or deprecated commands.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .subcommand(
+          Command::new("old-cmd")
+              .hide(true)
+              .about("Deprecated; use new-cmd instead")
+      );
+  ```
+</ParamField>
+
+<ParamField path="flatten_help" type="fn(self, yes: bool) -> Self">
+  When enabled, the command's subcommands are listed inline in the help output rather than nested. This can produce a compact help for simple multi-level commands.
+
+  ```rust
+  use clap::{Command, arg};
+
+  let cmd = Command::new("stash")
+      .flatten_help(true)
+      .subcommand(Command::new("push").args(vec![arg!(-m --message <MSG>)]))
+      .subcommand(Command::new("pop"));
+  ```
+</ParamField>
+
+<ParamField path="args_conflicts_with_subcommands" type="fn(self, yes: bool) -> Self">
+  When enabled, all positional arguments and options are treated as conflicting with subcommands. If a subcommand is detected, all other argument parsing is skipped. Useful when a command has both a default action (via arguments) and named subcommands.
+
+  ```rust
+  use clap::{Command, arg};
+
+  let cmd = Command::new("stash")
+      .args_conflicts_with_subcommands(true)
+      .arg(arg!(-m --message <MSG> "Stash message"))
+      .subcommand(Command::new("pop"))
+      .subcommand(Command::new("apply"));
+  ```
+</ParamField>
+
+---
+
+## Parsing
+
+<ParamField path="get_matches" type="fn(self) -> ArgMatches">
+  Parses `std::env::args_os()` and returns `ArgMatches`. On error (including `--help` or `--version`), the process exits with an appropriate message and exit code.
+
+  ```rust
+  use clap::{Command, arg};
+
+  let matches = Command::new("myapp")
+      .arg(arg!([name] "Your name"))
+      .get_matches();
+  ```
+</ParamField>
+
+<ParamField path="try_get_matches" type="fn(self) -> Result<ArgMatches, clap::Error>">
+  Like `get_matches`, but returns a `Result` instead of exiting. The error includes `--help` and `--version` display events, so callers must check for `ErrorKind::DisplayHelp` and `ErrorKind::DisplayVersion` if they want to handle those cases explicitly.
+
+  ```rust
+  use clap::Command;
+
+  let result = Command::new("myapp")
+      .try_get_matches();
+
+  let matches = result.unwrap_or_else(|e| e.exit());
+  ```
+</ParamField>
+
+<ParamField path="get_matches_from" type="fn(self, itr: I) -> ArgMatches">
+  Parses arguments from an arbitrary iterator instead of `std::env::args_os()`. The first element is treated as the binary name. Exits on failure.
+
+  ```rust
+  use clap::{Command, arg};
+
+  let matches = Command::new("myapp")
+      .arg(arg!([name] "Your name"))
+      .get_matches_from(vec!["myapp", "Alice"]);
+
+  assert_eq!(matches.get_one::<String>("name").map(|s| s.as_str()), Some("Alice"));
+  ```
+</ParamField>
+
+<ParamField path="try_get_matches_from" type="fn(self, itr: I) -> Result<ArgMatches, clap::Error>">
+  Like `get_matches_from`, but returns a `Result`. Useful in tests and library code where exiting the process is undesirable.
+
+  ```rust
+  use clap::{Command, arg};
+
+  let result = Command::new("myapp")
+      .arg(arg!(<name> "Your name"))
+      .try_get_matches_from(vec!["myapp", "Alice"]);
+
+  assert!(result.is_ok());
+  ```
+</ParamField>
+
+---
+
+## Help and Version
+
+<ParamField path="disable_help_flag" type="fn(self, yes: bool) -> Self">
+  Removes the automatic `-h` / `--help` flags. Use this when you need `-h` for your own purpose or want to define a custom help implementation.
+
+  ```rust
+  use clap::{Command, Arg, ArgAction};
+
+  let cmd = Command::new("myapp")
+      .disable_help_flag(true)
+      .arg(
+          Arg::new("help")
+              .long("help")
+              .global(true)
+              .action(ArgAction::Help)
+      );
+  ```
+</ParamField>
+
+<ParamField path="disable_version_flag" type="fn(self, yes: bool) -> Self">
+  Removes the automatic `-V` / `--version` flags. Use when you need `-V` for another purpose or want to control version display yourself.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .version("2.0.0")
+      .disable_version_flag(true);
+  ```
+</ParamField>
+
+<ParamField path="help_template" type="fn(self, s: impl IntoResettable<StyledStr>) -> Self">
+  Overrides the entire help message template. The template string supports `{about}`, `{usage}`, `{all-args}`, `{subcommands}`, and other placeholder tokens. Refer to the clap documentation for the full list of available variables.
+
+  ```rust
+  use clap::Command;
+
+  let cmd = Command::new("myapp")
+      .version("1.0")
+      .help_template("{name} {version}\n{about}\n\nUSAGE:\n    {usage}\n\n{all-args}");
+  ```
+</ParamField>
+
+---
+
+## Styles
+
+<ParamField path="styles" type="fn(self, styles: Styles) -> Self">
+  Sets the ANSI styling used for help output. Requires the `color` feature. Use `clap::builder::styling::Styles` to construct a custom palette for headings, literals, and placeholders.
+
+  ```rust
+  use clap::Command;
+  use clap::builder::styling;
+
+  let styles = styling::Styles::styled()
+      .header(styling::AnsiColor::Green.on_default().bold())
+      .usage(styling::AnsiColor::Green.on_default().bold())
+      .literal(styling::AnsiColor::Cyan.on_default().bold());
+
+  let cmd = Command::new("myapp")
+      .styles(styles);
+  ```
+</ParamField>
+
+---
+
+## Full example
+
+The following example shows a `git`-style CLI with subcommands, external subcommand support, and several behavior flags drawn from the official clap examples:
+
+```rust
+use clap::{Command, arg};
+use std::path::PathBuf;
+
+fn cli() -> Command {
+    Command::new("git")
+        .about("A fictional versioning CLI")
+        .version("1.0.0")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .allow_external_subcommands(true)
+        .subcommand(
+            Command::new("clone")
+                .about("Clones repos")
+                .arg(arg!(<REMOTE> "The remote to clone"))
+                .arg_required_else_help(true),
+        )
+        .subcommand(
+            Command::new("add")
+                .about("Adds files to the index")
+                .arg_required_else_help(true)
+                .arg(
+                    arg!(<PATH> ... "Files to add")
+                        .value_parser(clap::value_parser!(PathBuf))
+                ),
+        )
+}
+
+fn main() {
+    let matches = cli().get_matches();
+
+    match matches.subcommand() {
+        Some(("clone", sub)) => {
+            println!("Cloning {}", sub.get_one::<String>("REMOTE").unwrap());
+        }
+        Some(("add", sub)) => {
+            let paths: Vec<_> = sub
+                .get_many::<PathBuf>("PATH")
+                .unwrap_or_default()
+                .collect();
+            println!("Adding {paths:?}");
+        }
+        Some((ext, sub)) => {
+            let args: Vec<_> = sub
+                .get_many::<std::ffi::OsString>("")
+                .unwrap_or_default()
+                .collect();
+            println!("External subcommand: {ext}, args: {args:?}");
+        }
+        _ => unreachable!(),
+    }
+}
+```

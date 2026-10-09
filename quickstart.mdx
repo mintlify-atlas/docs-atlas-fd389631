@@ -1,47 +1,506 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "clap Quickstart: Build Your First Working Rust CLI"
+sidebarTitle: "Quickstart"
+description: "Build a fully working Rust CLI with clap in minutes. Covers positional arguments, flags, and options with both the derive and builder APIs."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+This guide gets you from zero to a fully working command-line program in a few minutes. You will build a small tool that accepts a name, an optional count, and a verbose flag — enough to see every major argument type in action. Both the derive API (recommended) and the builder API are shown side-by-side so you can pick the style that fits your project.
 
 ## Prerequisites
 
-Before you begin, you must have:
+Make sure clap is in your `Cargo.toml` before continuing. The derive API requires the `derive` feature:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+```toml
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+```
 
-## Get started
+Or with `cargo add`:
 
-<Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+```bash
+cargo add clap --features derive
+```
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+## Your First CLI
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+<Tabs>
+  <Tab title="Derive API">
+    <Steps>
+      <Step title="Define your arguments as a struct">
+        Create `src/main.rs` with the following. Each field becomes one argument; doc comments become help text:
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
-</Steps>
+        ```rust
+        use clap::Parser;
+
+        /// Simple program to greet a person
+        #[derive(Parser, Debug)]
+        #[command(version, about, long_about = None)]
+        struct Args {
+            /// Name of the person to greet
+            #[arg(short, long)]
+            name: String,
+
+            /// Number of times to greet
+            #[arg(short, long, default_value_t = 1)]
+            count: u8,
+        }
+
+        fn main() {
+            let args = Args::parse();
+
+            for _ in 0..args.count {
+                println!("Hello {}!", args.name);
+            }
+        }
+        ```
+      </Step>
+      <Step title="Run it">
+        ```bash
+        cargo run -- --name Me
+        ```
+      </Step>
+      <Step title="See the output">
+        ```console
+        $ cargo run -- --name Me
+        Hello Me!
+
+        $ cargo run -- --name Me --count 3
+        Hello Me!
+        Hello Me!
+        Hello Me!
+
+        $ cargo run -- --help
+        Simple program to greet a person
+
+        Usage: demo[EXE] [OPTIONS] --name <NAME>
+
+        Options:
+          -n, --name <NAME>    Name of the person to greet
+          -c, --count <COUNT>  Number of times to greet [default: 1]
+          -h, --help           Print help
+          -V, --version        Print version
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Builder API">
+    <Steps>
+      <Step title="Build the command programmatically">
+        The builder API uses method chaining on `Command` and `Arg` instead of struct annotations:
+
+        ```rust
+        use clap::{Arg, Command};
+
+        fn main() {
+            let matches = Command::new("greet")
+                .version("1.0")
+                .about("Simple program to greet a person")
+                .arg(
+                    Arg::new("name")
+                        .short('n')
+                        .long("name")
+                        .required(true)
+                        .help("Name of the person to greet"),
+                )
+                .arg(
+                    Arg::new("count")
+                        .short('c')
+                        .long("count")
+                        .default_value("1")
+                        .help("Number of times to greet"),
+                )
+                .get_matches();
+
+            let name = matches.get_one::<String>("name").unwrap();
+            let count: u8 = matches
+                .get_one::<String>("count")
+                .unwrap()
+                .parse()
+                .expect("count must be a number");
+
+            for _ in 0..count {
+                println!("Hello {name}!");
+            }
+        }
+        ```
+      </Step>
+      <Step title="Run it">
+        ```bash
+        cargo run -- --name Me --count 3
+        ```
+      </Step>
+      <Step title="See the output">
+        ```console
+        $ cargo run -- --name Me
+        Hello Me!
+
+        $ cargo run -- --help
+        Simple program to greet a person
+
+        Usage: greet[EXE] [OPTIONS] --name <name>
+
+        Options:
+          -n, --name <name>    Name of the person to greet
+          -c, --count <count>  Number of times to greet [default: 1]
+          -h, --help           Print help
+          -V, --version        Print version
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  The derive API and builder API produce the same runtime parser. You can mix them in a single project — for example, using `#[derive(Parser)]` on a struct and then calling `.arg()` on the resulting `Command` to add dynamic arguments.
 </Tip>
+
+## Argument Types
+
+Every CLI argument falls into one of three categories. Here is how each looks in both APIs.
+
+### Positional Arguments
+
+A positional argument is matched by its position in the command line, not by a flag name. In the derive API, a field with no `#[arg(short)]` or `#[arg(long)]` annotation becomes positional. Making the type `Option<T>` makes it optional.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    #[command(version, about, long_about = None)]
+    struct Cli {
+        /// Optional name to operate on
+        name: Option<String>,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+        println!("name: {:?}", cli.name);
+    }
+    ```
+
+    ```console
+    $ myapp
+    name: None
+
+    $ myapp alice
+    name: Some("alice")
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, command};
+
+    fn main() {
+        let matches = command!()
+            .arg(Arg::new("name"))
+            .get_matches();
+
+        println!("name: {:?}", matches.get_one::<String>("name"));
+    }
+    ```
+
+    ```console
+    $ myapp
+    name: None
+
+    $ myapp alice
+    name: Some("alice")
+    ```
+  </Tab>
+</Tabs>
+
+### Flags (Boolean Switches)
+
+A flag is present or absent — it takes no value. Common examples are `--verbose` and `--dry-run`. In the derive API, a `bool` field with `#[arg(short, long)]` becomes a flag.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    #[command(version, about, long_about = None)]
+    struct Cli {
+        #[arg(short, long)]
+        verbose: bool,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+        println!("verbose: {:?}", cli.verbose);
+    }
+    ```
+
+    ```console
+    $ myapp
+    verbose: false
+
+    $ myapp --verbose
+    verbose: true
+
+    $ myapp -v
+    verbose: true
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, ArgAction, command};
+
+    fn main() {
+        let matches = command!()
+            .arg(
+                Arg::new("verbose")
+                    .short('v')
+                    .long("verbose")
+                    .action(ArgAction::SetTrue),
+            )
+            .get_matches();
+
+        println!("verbose: {:?}", matches.get_flag("verbose"));
+    }
+    ```
+
+    ```console
+    $ myapp
+    verbose: false
+
+    $ myapp --verbose
+    verbose: true
+    ```
+  </Tab>
+</Tabs>
+
+### Options (Named Values)
+
+An option takes a value after the flag name: `--name alice` or `--name=alice` or `-n alice`. In the derive API, any field with `#[arg(short, long)]` that is not `bool` becomes an option. Wrapping the type in `Option<T>` makes the flag optional.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use clap::Parser;
+
+    #[derive(Parser)]
+    #[command(version, about, long_about = None)]
+    struct Cli {
+        /// Sets a name
+        #[arg(short, long)]
+        name: String,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+        println!("name: {:?}", cli.name);
+    }
+    ```
+
+    ```console
+    $ myapp --name bob
+    name: "bob"
+
+    $ myapp --name=bob
+    name: "bob"
+
+    $ myapp -n bob
+    name: "bob"
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use clap::{Arg, command};
+
+    fn main() {
+        let matches = command!()
+            .arg(Arg::new("name").short('n').long("name"))
+            .get_matches();
+
+        println!("name: {:?}", matches.get_one::<String>("name"));
+    }
+    ```
+
+    ```console
+    $ myapp --name bob
+    name: Some("bob")
+
+    $ myapp
+    name: None
+    ```
+  </Tab>
+</Tabs>
+
+## A Complete Example with All Three Types
+
+The following program combines a positional argument, a counted flag (`-d`/`-dd` for increasing debug verbosity), an optional config file option, and a subcommand. It is taken directly from the clap tutorial examples.
+
+<Tabs>
+  <Tab title="Derive API">
+    ```rust
+    use std::path::PathBuf;
+
+    use clap::{Parser, Subcommand};
+
+    #[derive(Parser)]
+    #[command(version, about, long_about = None)]
+    struct Cli {
+        /// Optional name to operate on
+        name: Option<String>,
+
+        /// Sets a custom config file
+        #[arg(short, long, value_name = "FILE")]
+        config: Option<PathBuf>,
+
+        /// Turn debugging information on
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        debug: u8,
+
+        #[command(subcommand)]
+        command: Option<Commands>,
+    }
+
+    #[derive(Subcommand)]
+    enum Commands {
+        /// does testing things
+        Test {
+            /// lists test values
+            #[arg(short, long)]
+            list: bool,
+        },
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+
+        if let Some(name) = cli.name.as_deref() {
+            println!("Value for name: {name}");
+        }
+
+        if let Some(config_path) = cli.config.as_deref() {
+            println!("Value for config: {}", config_path.display());
+        }
+
+        match cli.debug {
+            0 => println!("Debug mode is off"),
+            1 => println!("Debug mode is kind of on"),
+            2 => println!("Debug mode is on"),
+            _ => println!("Don't be crazy"),
+        }
+
+        match &cli.command {
+            Some(Commands::Test { list }) => {
+                if *list {
+                    println!("Printing testing lists...");
+                } else {
+                    println!("Not printing testing lists...");
+                }
+            }
+            None => {}
+        }
+    }
+    ```
+  </Tab>
+  <Tab title="Builder API">
+    ```rust
+    use std::path::PathBuf;
+
+    use clap::{ArgAction, Command, arg, command, value_parser};
+
+    fn main() {
+        let matches = command!() // requires `cargo` feature
+            .arg(arg!([name] "Optional name to operate on"))
+            .arg(
+                arg!(
+                    -c --config <FILE> "Sets a custom config file"
+                )
+                .required(false)
+                .value_parser(value_parser!(PathBuf)),
+            )
+            .arg(arg!(
+                -d --debug ... "Turn debugging information on"
+            ))
+            .subcommand(
+                Command::new("test")
+                    .about("does testing things")
+                    .arg(arg!(-l --list "lists test values").action(ArgAction::SetTrue)),
+            )
+            .get_matches();
+
+        if let Some(name) = matches.get_one::<String>("name") {
+            println!("Value for name: {name}");
+        }
+
+        if let Some(config_path) = matches.get_one::<PathBuf>("config") {
+            println!("Value for config: {}", config_path.display());
+        }
+
+        match matches
+            .get_one::<u8>("debug")
+            .expect("Counts are defaulted")
+        {
+            0 => println!("Debug mode is off"),
+            1 => println!("Debug mode is kind of on"),
+            2 => println!("Debug mode is on"),
+            _ => println!("Don't be crazy"),
+        }
+
+        if let Some(matches) = matches.subcommand_matches("test") {
+            if matches.get_flag("list") {
+                println!("Printing testing lists...");
+            } else {
+                println!("Not printing testing lists...");
+            }
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+Running the complete example produces:
+
+```console
+$ myapp --help
+A simple to use, efficient, and full-featured Command Line Argument Parser
+
+Usage: myapp[EXE] [OPTIONS] [NAME] [COMMAND]
+
+Commands:
+  test  does testing things
+  help  Print this message or the help of the given subcommand(s)
+
+Arguments:
+  [NAME]  Optional name to operate on
+
+Options:
+  -c, --config <FILE>  Sets a custom config file
+  -d, --debug...       Turn debugging information on
+  -h, --help           Print help
+  -V, --version        Print version
+
+$ myapp
+Debug mode is off
+
+$ myapp -dd test
+Debug mode is on
+Not printing testing lists...
+```
+
+<Note>
+  The `command!()` macro (builder API) and `crate_version!()` / `crate_name!()` macros read values from `CARGO_PKG_*` environment variables at compile time. They require the `cargo` feature flag: `clap = { version = "4", features = ["cargo"] }`.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Typed Values & Validation" icon="shield-check" href="https://docs.rs/clap/latest/clap/_derive/_tutorial/chapter_4/index.html">
+    Parse arguments into enums, validate ranges, and return custom errors.
+  </Card>
+  <Card title="Subcommands" icon="sitemap" href="https://docs.rs/clap/latest/clap/_derive/_tutorial/chapter_3/index.html">
+    Build multi-level CLI tools like `cargo` or `git`.
+  </Card>
+  <Card title="Shell Completions" icon="terminal" href="https://crates.io/crates/clap_complete">
+    Generate completion scripts for Bash, Zsh, Fish, and more with `clap_complete`.
+  </Card>
+  <Card title="Full API Reference" icon="book" href="https://docs.rs/clap/latest/clap/">
+    Browse every type, trait, and attribute clap exposes on docs.rs.
+  </Card>
+</CardGroup>

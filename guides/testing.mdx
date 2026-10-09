@@ -1,0 +1,242 @@
+---
+title: "Testing clap CLIs: Assertions, Snapshots, and More"
+sidebarTitle: "Testing"
+description: "Test your clap-based CLI with debug_assert for structural validation, trycmd for snapshot tests, and assert_cmd for programmatic integration tests."
+---
+
+A well-tested CLI is just as important as a well-tested library. Clap offers built-in validation hooks, and the Rust ecosystem provides snapshot-testing and integration-testing crates that pair naturally with clap's `Command` definitions. This guide walks through the three main testing layers you should reach for.
+
+## Layer 1: `Command::debug_assert()`
+
+The cheapest test you can write is a structural validation of your `Command` definition. `Command::debug_assert()` runs a suite of built-in consistency checks — argument conflicts, required flags, duplicate names — and panics immediately if anything is wrong. These checks are compiled out in release builds, so they add zero cost to your shipped binary.
+
+The canonical pattern, taken directly from the clap tutorial examples, puts the command in a standalone function and calls `debug_assert()` in a `#[test]`:
+
+<Tabs>
+  <Tab title="Builder API">
+    ```rust
+    // examples/tutorial_builder/05_01_assert.rs
+    use clap::{arg, command, value_parser};
+
+    fn main() {
+        let matches = cmd().get_matches();
+
+        // Note, it's safe to call unwrap() because the arg is required
+        let port: usize = *matches
+            .get_one::<usize>("PORT")
+            .expect("'PORT' is required and parsing will fail if its missing");
+        println!("PORT = {port}");
+    }
+
+    fn cmd() -> clap::Command {
+        command!() // requires `cargo` feature
+            .arg(
+                arg!(<PORT>)
+                    .help("Network port to use")
+                    .value_parser(value_parser!(usize)),
+            )
+    }
+
+    #[test]
+    fn verify_cmd() {
+        cmd().debug_assert();
+    }
+    ```
+  </Tab>
+  <Tab title="Derive API">
+    ```rust
+    // examples/tutorial_derive/05_01_assert.rs
+    use clap::Parser;
+
+    #[derive(Parser)]
+    #[command(version, about, long_about = None)]
+    struct Cli {
+        /// Network port to use
+        port: u16,
+    }
+
+    fn main() {
+        let cli = Cli::parse();
+        println!("PORT = {}", cli.port);
+    }
+
+    #[test]
+    fn verify_cli() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+    ```
+
+    With the derive API, call `YourStruct::command()` (from the `CommandFactory` trait) to obtain the underlying `Command`.
+  </Tab>
+</Tabs>
+
+<Tip>
+  Make `debug_assert` tests a mandatory part of your CI pipeline. They catch
+  misconfigured `Command` structures immediately, before users ever see a broken
+  CLI.
+</Tip>
+
+## Layer 2: Snapshot Testing with `trycmd`
+
+The `trycmd` crate runs your compiled binary against a collection of `.md` or `.toml` test-case files and compares the actual output against recorded snapshots. The clap project itself uses this approach for every example in the repository.
+
+Add `trycmd` to your dev dependencies:
+
+```toml
+[dev-dependencies]
+# Cutting out `filesystem` feature
+trycmd = { version = "1.2", default-features = false, features = ["color-auto", "diff", "examples"] }
+```
+
+### Writing a trycmd Test
+
+Create a `tests/` directory and a snapshot file — typically named after the binary under test with a `.md` extension. Each code fence tagged `console` is one test case:
+
+```markdown
+<!-- tests/myapp.md -->
+$ myapp --help
+A tool that does things
+
+Usage: myapp [OPTIONS] <PORT>
+
+Arguments:
+  <PORT>  Network port to use
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+```
+
+Then write a test that discovers and runs those files:
+
+```rust
+// tests/examples.rs
+#[test]
+fn example_tests() {
+    let t = trycmd::TestCases::new();
+    t.register_bins(trycmd::cargo::compile_examples([]).unwrap());
+    t.case("tests/**/*.md");
+}
+```
+
+<Note>
+  The `trycmd::cargo::compile_examples` helper compiles all examples in the
+  current workspace and registers them as available binaries, mirroring exactly
+  how the clap project tests its own examples.
+</Note>
+
+### Updating Snapshots
+
+When you intentionally change your CLI's output, update the snapshot files by running:
+
+```console
+$ TRYCMD=overwrite cargo test
+```
+
+`trycmd` will rewrite the expected output sections in-place. Commit the updated files to record the new expected behavior.
+
+## Layer 3: Programmatic Testing with `assert_cmd`
+
+For more granular tests — asserting specific exit codes, testing stderr, or building dynamic argument lists — `assert_cmd` provides a builder-style API over `std::process::Command`.
+
+```toml
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+```
+
+### Testing Exit Codes and Output
+
+```rust
+use assert_cmd::Command;
+use predicates::prelude::*;
+
+#[test]
+fn test_missing_required_arg() {
+    let mut cmd = Command::cargo_bin("myapp").unwrap();
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("required"));
+}
+
+#[test]
+fn test_help_flag() {
+    let mut cmd = Command::cargo_bin("myapp").unwrap();
+    cmd.arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage"));
+}
+
+#[test]
+fn test_valid_port() {
+    let mut cmd = Command::cargo_bin("myapp").unwrap();
+    cmd.arg("8080")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PORT = 8080"));
+}
+```
+
+## Layer 4: Testing Argument Parsing Directly
+
+You do not always need to spawn a subprocess. For pure parsing logic, use `Command::try_get_matches_from()` to parse a slice of arguments in-process:
+
+```rust
+use clap::{arg, command, value_parser};
+
+fn cmd() -> clap::Command {
+    command!()
+        .arg(
+            arg!(<PORT>)
+                .help("Network port to use")
+                .value_parser(value_parser!(usize)),
+        )
+}
+
+#[test]
+fn parses_valid_port() {
+    let m = cmd().try_get_matches_from(["myapp", "3000"]).unwrap();
+    let port = m.get_one::<usize>("PORT").copied().unwrap();
+    assert_eq!(port, 3000);
+}
+
+#[test]
+fn rejects_non_numeric_port() {
+    let result = cmd().try_get_matches_from(["myapp", "not-a-port"]);
+    assert!(result.is_err());
+}
+```
+
+<Note>
+  `try_get_matches_from` returns `Result<ArgMatches, clap::Error>` and never
+  calls `std::process::exit`, making it safe to call from tests without
+  terminating the test process.
+</Note>
+
+## Recommended Test Matrix
+
+<CardGroup cols={2}>
+  <Card title="debug_assert" icon="shield-check">
+    **When:** Always — one test per binary entry point.  
+    **Cost:** Near-zero, compiled out in release.  
+    **Catches:** Bad `Command` configuration, conflicting arguments.
+  </Card>
+  <Card title="trycmd snapshots" icon="camera">
+    **When:** You care about exact help text and error message formatting.  
+    **Cost:** Requires compiling the binary; runs in CI.  
+    **Catches:** Unintended output changes, broken subcommand routing.
+  </Card>
+  <Card title="assert_cmd" icon="flask">
+    **When:** You need to assert exit codes, stream content, or dynamic inputs.  
+    **Cost:** Process spawning per test.  
+    **Catches:** Integration-level regressions.
+  </Card>
+  <Card title="In-process parsing" icon="code">
+    **When:** Testing parse logic without side effects.  
+    **Cost:** Cheapest integration test — no subprocess.  
+    **Catches:** Value parsing, validation, and `ArgMatches` access bugs.
+  </Card>
+</CardGroup>

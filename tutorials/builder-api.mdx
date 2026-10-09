@@ -1,0 +1,475 @@
+---
+title: "Builder API Tutorial: Construct CLIs Programmatically"
+sidebarTitle: "Builder API"
+description: "Learn to build Rust command-line apps using clap's builder API — Commands, Args, ArgMatches, value parsers, subcommands, and argument relations."
+---
+
+The builder API gives you a programmatic, method-chaining interface for constructing a clap parser at runtime. You create a `Command`, attach `Arg`s to it, and call `get_matches()` to parse `std::env::args_os()`. The parsed values are then retrieved from the returned `ArgMatches` using typed getter methods. This approach is more verbose than the derive API but gives you full control over how arguments are defined and composed — making it a natural fit when argument structure is determined at runtime or when you are integrating clap into a larger framework.
+
+<Note>
+  The builder API is available in clap's default feature set. No extra feature flags are required:
+
+  ```console
+  $ cargo add clap
+  ```
+
+  The `command!()` macro used in several examples below requires the optional `cargo` feature, which reads metadata from `Cargo.toml`:
+
+  ```console
+  $ cargo add clap --features cargo
+  ```
+</Note>
+
+---
+
+## Quick Start
+
+<Steps>
+  <Step title="Create a Command and attach Args">
+    Start with `Command::new(\"name\")` (or `command!()` to read metadata from `Cargo.toml`). Chain `.arg()` calls to add each argument, then call `.get_matches()` to parse the command line.
+
+    ```rust
+    use std::path::PathBuf;
+
+    use clap::{ArgAction, Command, arg, command, value_parser};
+
+    fn main() {
+        let matches = command!() // requires `cargo` feature
+            .arg(arg!([name] "Optional name to operate on"))
+            .arg(
+                arg!(
+                    -c --config <FILE> "Sets a custom config file"
+                )
+                // We don't have syntax yet for optional options, so manually calling `required`
+                .required(false)
+                .value_parser(value_parser!(PathBuf)),
+            )
+            .arg(arg!(
+                -d --debug ... "Turn debugging information on"
+            ))
+            .subcommand(
+                Command::new("test")
+                    .about("does testing things")
+                    .arg(arg!(-l --list "lists test values").action(ArgAction::SetTrue)),
+            )
+            .get_matches();
+
+        // You can check the value provided by positional arguments, or option arguments
+        if let Some(name) = matches.get_one::<String>("name") {
+            println!("Value for name: {name}");
+        }
+
+        if let Some(config_path) = matches.get_one::<PathBuf>("config") {
+            println!("Value for config: {}", config_path.display());
+        }
+
+        // You can see how many times a particular flag or argument occurred
+        // Note, only flags can have multiple occurrences
+        match matches
+            .get_one::<u8>("debug")
+            .expect("Counts are defaulted")
+        {
+            0 => println!("Debug mode is off"),
+            1 => println!("Debug mode is kind of on"),
+            2 => println!("Debug mode is on"),
+            _ => println!("Don't be crazy"),
+        }
+
+        // You can check for the existence of subcommands, and if found use their
+        // matches just as you would the top level cmd
+        if let Some(matches) = matches.subcommand_matches("test") {
+            // "$ myapp test" was run
+            if matches.get_flag("list") {
+                // "$ myapp test -l" was run
+                println!("Printing testing lists...");
+            } else {
+                println!("Not printing testing lists...");
+            }
+        }
+
+        // Continued program logic goes here...
+    }
+    ```
+  </Step>
+
+  <Step title="Read values from ArgMatches">
+    Use `matches.get_one::<T>(\"id\")` to retrieve typed values. The ID string must match what was passed to `Arg::new()` or inferred from the `arg!()` macro. Use `matches.get_flag(\"id\")` for boolean flags, and `matches.subcommand_matches(\"name\")` to descend into a subcommand's matches.
+  </Step>
+</Steps>
+
+---
+
+## Configuring the Parser
+
+### Manual metadata
+
+Set the application name, version, and description by chaining builder methods on `Command`:
+
+```rust
+use clap::{Command, arg};
+
+fn main() {
+    let matches = Command::new("MyApp")
+        .version("1.0")
+        .about("Does awesome things")
+        .arg(arg!(--two <VALUE>).required(true))
+        .arg(arg!(--one <VALUE>).required(true))
+        .get_matches();
+
+    println!(
+        "two: {:?}",
+        matches.get_one::<String>("two").expect("required")
+    );
+    println!(
+        "one: {:?}",
+        matches.get_one::<String>("one").expect("required")
+    );
+}
+```
+
+<Tip>
+  Every method on `Command` returns `Self`, so you can chain as many calls as needed before the final `.get_matches()`.
+</Tip>
+
+---
+
+## Argument Types
+
+### Positional Arguments
+
+An `Arg` without `.short()` or `.long()` is positional — the user provides its value by position on the command line. You can also use the `arg!()` macro with bare brackets `[name]` for optional positionals or angle brackets `<NAME>` for required positionals.
+
+```rust
+use clap::{Arg, command};
+
+fn main() {
+    let matches = command!() // requires `cargo` feature
+        .arg(Arg::new("name"))
+        .get_matches();
+
+    println!("name: {:?}", matches.get_one::<String>("name"));
+}
+```
+
+### Options (`--name <VALUE>`)
+
+Named options are created by calling `.short('n')`, `.long("name")`, or both on an `Arg`. The user passes them as `-n Alice` or `--name Alice`.
+
+```rust
+use clap::{Arg, command};
+
+fn main() {
+    let matches = command!() // requires `cargo` feature
+        .arg(Arg::new("name").short('n').long("name"))
+        .get_matches();
+
+    println!("name: {:?}", matches.get_one::<String>("name"));
+}
+```
+
+Options are optional by default. Call `.required(true)` to make one mandatory.
+
+### Flags (`--verbose`)
+
+A flag is an argument that carries no value — its presence alone conveys meaning. Set `.action(ArgAction::SetTrue)` (or `ArgAction::SetFalse`) to create a boolean flag. Retrieve its value with `matches.get_flag("id")`.
+
+```rust
+use clap::{Arg, ArgAction, command};
+
+fn main() {
+    let matches = command!() // requires `cargo` feature
+        .arg(
+            Arg::new("verbose")
+                .short('v')
+                .long("verbose")
+                .action(ArgAction::SetTrue),
+        )
+        .get_matches();
+
+    println!("verbose: {:?}", matches.get_flag("verbose"));
+}
+```
+
+### Subcommands
+
+Add a nested `Command` with `.subcommand()`. After parsing, call `matches.subcommand()` to get a `(&str, &ArgMatches)` pair — the name of the matched subcommand and its own matches.
+
+```rust
+use clap::{Command, arg, command};
+
+fn main() {
+    let matches = command!() // requires `cargo` feature
+        .propagate_version(true)
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("add")
+                .about("Adds files to myapp")
+                .arg(arg!([NAME])),
+        )
+        .get_matches();
+
+    match matches.subcommand() {
+        Some(("add", sub_matches)) => println!(
+            "'myapp add' was used, name is: {:?}",
+            sub_matches.get_one::<String>("NAME")
+        ),
+        _ => unreachable!("Exhausted list of subcommands and subcommand_required prevents `None`"),
+    }
+}
+```
+
+<Note>
+  `.subcommand_required(true)` causes clap to exit with an error if the user does not specify a subcommand. `.arg_required_else_help(true)` prints help when the user runs the binary with no arguments at all.
+</Note>
+
+---
+
+## Reading Matches with `ArgMatches`
+
+`ArgMatches` is the result type of `get_matches()`. Key methods:
+
+| Method | Use |
+|--------|-----|
+| `get_one::<T>("id")` | Get an `Option<&T>` for a named argument |
+| `get_flag("id")` | Get a `bool` for a `SetTrue`/`SetFalse` flag |
+| `get_count("id")` | Get a `u8` count for a `Count` action flag |
+| `get_many::<T>("id")` | Iterate over multiple values |
+| `contains_id("id")` | Check whether the argument was provided |
+| `subcommand()` | Returns `Option<(&str, &ArgMatches)>` |
+| `subcommand_matches("name")` | Returns `Option<&ArgMatches>` for a specific subcommand |
+
+All `get_*` methods are generic over the value type. The type must match the `value_parser` configured for that argument.
+
+---
+
+## Value Parsing with `value_parser!()`
+
+By default, clap parses all argument values as `String`. Use `.value_parser()` to parse them into a specific Rust type. The `value_parser!()` macro selects the right parser for many standard types automatically.
+
+```rust
+use clap::{arg, command, value_parser};
+
+fn main() {
+    let matches = command!() // requires `cargo` feature
+        .arg(
+            arg!(<PORT>)
+                .help("Network port to use")
+                .value_parser(value_parser!(u16).range(1..)),
+        )
+        .get_matches();
+
+    // Note, it's safe to call unwrap() because the arg is required
+    let port: u16 = *matches
+        .get_one::<u16>("PORT")
+        .expect("'PORT' is required and parsing will fail if its missing");
+    println!("PORT = {port}");
+}
+```
+
+`value_parser!(u16).range(1..)` rejects `0` as well as values that do not fit in a `u16`, all before your application logic runs.
+
+<Tip>
+  `value_parser!(PathBuf)`, `value_parser!(u32)`, `value_parser!(f64)`, and similar calls work out of the box for any type that implements `FromStr`. For custom logic, implement the `TypedValueParser` trait.
+</Tip>
+
+---
+
+## Possible Values
+
+When an argument must be one of a known set of strings, pass a slice to `.value_parser()`:
+
+```rust
+use clap::{arg, command};
+
+fn main() {
+    let matches = command!() // requires `cargo` feature
+        .arg(
+            arg!(<MODE>)
+                .help("What mode to run the program in")
+                .value_parser(["fast", "slow"]),
+        )
+        .get_matches();
+
+    // Note, it's safe to call unwrap() because the arg is required
+    match matches
+        .get_one::<String>("MODE")
+        .expect("'MODE' is required and parsing will fail if its missing")
+        .as_str()
+    {
+        "fast" => {
+            println!("Hare");
+        }
+        "slow" => {
+            println!("Tortoise");
+        }
+        _ => unreachable!(),
+    }
+}
+```
+
+The allowed values appear in `--help` output and in error messages when an invalid value is supplied.
+
+---
+
+## Argument Relations
+
+You can declare that one argument requires another, that two arguments conflict, or that a group of arguments must have exactly one member. Use `ArgGroup` together with `.group()` on individual `Arg`s and `.group()` on the `Command`.
+
+```rust
+use std::path::PathBuf;
+
+use clap::{ArgAction, ArgGroup, arg, command, value_parser};
+
+fn main() {
+    // Create application like normal
+    let matches = command!() // requires `cargo` feature
+        // Add the version arguments
+        .arg(arg!(--"set-ver" <VER> "set version manually"))
+        .arg(arg!(--major         "auto inc major").action(ArgAction::SetTrue))
+        .arg(arg!(--minor         "auto inc minor").action(ArgAction::SetTrue))
+        .arg(arg!(--patch         "auto inc patch").action(ArgAction::SetTrue))
+        // Create a group, make it required, and add the above arguments
+        .group(
+            ArgGroup::new("vers")
+                .required(true)
+                .args(["set-ver", "major", "minor", "patch"]),
+        )
+        // Arguments can also be added to a group individually, these two arguments
+        // are part of the "input" group which is not required
+        .arg(
+            arg!([INPUT_FILE] "some regular input")
+                .value_parser(value_parser!(PathBuf))
+                .group("input"),
+        )
+        .arg(
+            arg!(--"spec-in" <SPEC_IN> "some special input argument")
+                .value_parser(value_parser!(PathBuf))
+                .group("input"),
+        )
+        // Now let's assume we have a -c [config] argument which requires one of
+        // (but **not** both) the "input" arguments
+        .arg(
+            arg!(config: -c <CONFIG>)
+                .value_parser(value_parser!(PathBuf))
+                .requires("input"),
+        )
+        .get_matches();
+
+    // Let's assume the old version 1.2.3
+    let mut major = 1;
+    let mut minor = 2;
+    let mut patch = 3;
+
+    // See if --set-ver was used to set the version manually
+    let version = if let Some(ver) = matches.get_one::<String>("set-ver") {
+        ver.to_owned()
+    } else {
+        // Increment the one requested (in a real program, we'd reset the lower numbers)
+        let (maj, min, pat) = (
+            matches.get_flag("major"),
+            matches.get_flag("minor"),
+            matches.get_flag("patch"),
+        );
+        match (maj, min, pat) {
+            (true, _, _) => major += 1,
+            (_, true, _) => minor += 1,
+            (_, _, true) => patch += 1,
+            _ => unreachable!(),
+        };
+        format!("{major}.{minor}.{patch}")
+    };
+
+    println!("Version: {version}");
+
+    // Check for usage of -c
+    if matches.contains_id("config") {
+        let input = matches
+            .get_one::<PathBuf>("INPUT_FILE")
+            .unwrap_or_else(|| matches.get_one::<PathBuf>("spec-in").unwrap())
+            .display();
+        println!(
+            "Doing work using input {} and config {}",
+            input,
+            matches.get_one::<PathBuf>("config").unwrap().display()
+        );
+    }
+}
+```
+
+Key relations demonstrated here:
+
+| Construct | Effect |
+|-----------|--------|
+| `ArgGroup::new("vers").required(true)` | One of the four version flags **must** be passed |
+| `.group("input")` on two args | Both belong to the `"input"` group |
+| `.requires("input")` on `-c` | `-c` is only valid when an `"input"` argument is also present |
+
+---
+
+## Custom Validation
+
+As a last resort for validation that cannot be expressed with built-in relations or value parsers, check conditions after parsing and use `Command::error` to emit a clap-formatted error message:
+
+```rust
+use clap::{Command, CommandFactory, ErrorKind};
+
+// After calling get_matches():
+// let matches = cmd.get_matches();
+// if some_condition_fails {
+//     cmd.error(ErrorKind::InvalidValue, "explain the problem").exit();
+// }
+```
+
+<Note>
+  Prefer `value_parser` or `ArgGroup` relations over post-parse validation whenever possible. They produce more consistent, user-friendly error messages and are enforced before your application logic runs.
+</Note>
+
+---
+
+## When to Prefer Builder over Derive
+
+<Tabs>
+  <Tab title="Use the builder API when…">
+    - Argument definitions are determined at **runtime** (e.g., loaded from a config file or plugin system).
+    - You are writing a library that exposes a configurable CLI component to downstream crates.
+    - You need fine-grained control over argument ordering, grouping, or help text layout that is cumbersome to express with attributes.
+    - You want to avoid the compile-time cost of procedural macros in very large workspaces.
+  </Tab>
+
+  <Tab title="Use the derive API when…">
+    - Your argument structure is known at compile time (the common case).
+    - You want minimal boilerplate and automatic type conversion.
+    - You value the self-documenting nature of annotated structs.
+    - You want to reuse argument sets across subcommands with `#[derive(Args)]` and `#[command(flatten)]`.
+
+    See the [Derive API tutorial](/tutorials/derive-api) for a full walkthrough.
+  </Tab>
+</Tabs>
+
+---
+
+## Testing Your Parser
+
+clap surfaces most builder misconfiguration bugs through `debug_assert!` checks. Trigger them during `cargo test` by calling `Command::debug_assert`:
+
+```rust
+#[test]
+fn verify_cli() {
+    build_cli().debug_assert();
+}
+```
+
+Where `build_cli()` is a function that constructs and returns your `Command` without calling `get_matches()`.
+
+<Tip>
+  Keep your `Command` construction in a dedicated function (e.g., `fn build_cli() -> Command`) so you can call it from both `main` and your tests without duplicating code.
+</Tip>
+
+---
+
+## Next Steps
+
+- **Derive API** — for a less verbose, struct-based approach, see the [Derive API tutorial](/tutorials/derive-api).
+- **Value parsers** — explore the full range of built-in and custom parsers in the [value parsers reference](/reference/value-parsers).
+- **Cookbook** — see complete, application-focused examples in the [cookbook](/guides/cookbook).

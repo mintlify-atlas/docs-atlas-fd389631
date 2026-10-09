@@ -1,0 +1,181 @@
+---
+title: "Man Pages: Generate ROFF Documentation with clap_mangen"
+sidebarTitle: "Man Pages"
+description: "Generate UNIX man pages in ROFF format from your clap::Command using clap_mangen — integrate via build.rs or a lean cargo-xtask workflow."
+---
+
+The `clap_mangen` crate converts a `clap::Command` definition into a ROFF-formatted man page. Because the man page is generated from the same command structure that drives your CLI, it stays accurate as your argument definitions evolve — no separate documentation maintenance required.
+
+## Adding clap_mangen
+
+Man page generation is typically done at development time, not at runtime in the shipped binary. The standard approach is to add `clap_mangen` as a **build dependency**:
+
+```console
+$ cargo add --build clap_mangen
+```
+
+This adds the following to your `Cargo.toml`:
+
+```toml
+[build-dependencies]
+clap_mangen = "0.3"
+```
+
+Your main `[dependencies]` block remains unchanged — `clap_mangen` is only present during the build step.
+
+## Basic Usage
+
+`clap_mangen` exposes a single primary type: `Man`. Construct it with your `Command`, then call `render()` to write ROFF bytes into any `Write` buffer.
+
+```rust
+use clap_mangen::Man;
+
+let cmd = clap::Command::new("mybin")
+    .arg(clap::arg!(-n --name <NAME>))
+    .arg(clap::arg!(-c --count <NUM>));
+
+let man = Man::new(cmd);
+let mut buffer: Vec<u8> = Default::default();
+man.render(&mut buffer)?;
+```
+
+`Man::new(cmd)` takes ownership of the `Command`. `man.render(&mut buffer)` writes the ROFF document into `buffer` and returns `std::io::Result<()>`.
+
+## Generating to OUT_DIR in build.rs
+
+The recommended production workflow writes the man page to the `OUT_DIR` provided by Cargo, then packages or installs it from there.
+
+Create a `build.rs` at your project root:
+
+```rust
+fn main() -> std::io::Result<()> {
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").ok_or(std::io::ErrorKind::NotFound)?
+    );
+
+    let cmd = clap::Command::new("mybin")
+        .arg(clap::arg!(-n --name <NAME>))
+        .arg(clap::arg!(-c --count <NUM>));
+
+    let man = clap_mangen::Man::new(cmd);
+    let mut buffer: Vec<u8> = Default::default();
+    man.render(&mut buffer)?;
+
+    std::fs::write(out_dir.join("mybin.1"), buffer)?;
+
+    Ok(())
+}
+```
+
+After running `cargo build`, the generated file will be at a path similar to:
+
+```
+target/debug/build/mybin-<hash>/out/mybin.1
+```
+
+<Note>
+  Man pages use a section-number suffix in their filename. Section `1` is for
+  user commands. The full list: `1` general commands, `2` system calls,
+  `3` library functions, `5` file formats, `7` miscellany, `8` system administration.
+</Note>
+
+## Using cargo-xtask as an Alternative
+
+Running `clap_mangen` in `build.rs` adds to every incremental build. For large projects, a [cargo-xtask](https://github.com/matklad/cargo-xtask) workflow is preferable: move the generation code into a dedicated `xtask` workspace member and run it on demand.
+
+<Steps>
+  <Step title="Add an xtask workspace member">
+    ```toml
+    # Cargo.toml (workspace root)
+    [workspace]
+    members = ["mybin", "xtask"]
+    ```
+  </Step>
+  <Step title="Create xtask/Cargo.toml">
+    ```toml
+    [package]
+    name = "xtask"
+    version = "0.1.0"
+    edition = "2021"
+
+    [dependencies]
+    clap = "4"
+    clap_mangen = "0.3"
+    ```
+  </Step>
+  <Step title="Write xtask/src/main.rs">
+    ```rust
+    fn main() -> std::io::Result<()> {
+        let out_dir = std::path::PathBuf::from("target/man");
+        std::fs::create_dir_all(&out_dir)?;
+
+        let cmd = clap::Command::new("mybin")
+            .arg(clap::arg!(-n --name <NAME>))
+            .arg(clap::arg!(-c --count <NUM>));
+
+        let man = clap_mangen::Man::new(cmd);
+        let mut buffer: Vec<u8> = Default::default();
+        man.render(&mut buffer)?;
+
+        std::fs::write(out_dir.join("mybin.1"), buffer)?;
+        println!("Generated target/man/mybin.1");
+
+        Ok(())
+    }
+    ```
+  </Step>
+  <Step title="Run the xtask">
+    ```console
+    $ cargo xtask gen-man
+    Generated target/man/mybin.1
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  The xtask approach keeps your regular `cargo build` fast. Reserve `build.rs`
+  for generation that absolutely must happen on every compile.
+</Tip>
+
+## Installing the Generated Man Page
+
+Once you have a `.1` file, install it where `man` can find it:
+
+<Tabs>
+  <Tab title="User-local (no root)">
+    ```bash
+    mkdir -p ~/.local/share/man/man1
+    cp target/debug/build/mybin-*/out/mybin.1 ~/.local/share/man/man1/
+
+    # Ensure the user man path is searched
+    export MANPATH="$HOME/.local/share/man:$MANPATH"
+    man mybin
+    ```
+  </Tab>
+  <Tab title="System-wide (root)">
+    ```bash
+    sudo cp target/release/build/mybin-*/out/mybin.1 /usr/local/share/man/man1/
+    sudo mandb  # update the man database
+    man mybin
+    ```
+  </Tab>
+  <Tab title="Homebrew / package managers">
+    Most package managers expect man pages under `share/man/man1/` relative to
+    the install prefix. Point `clap_mangen` output at that directory during your
+    packaging step.
+  </Tab>
+</Tabs>
+
+## Verifying the Output
+
+```console
+$ man --local-file target/debug/build/mybin-*/out/mybin.1
+```
+
+This renders the man page in your terminal without installing it, which is useful during development.
+
+<Note>
+  The `clap_mangen` crate uses the [`roff`](https://crates.io/crates/roff) crate
+  to produce standards-compliant ROFF output. The generated documents are
+  compatible with `groff`, `mandoc`, and other ROFF processors.
+</Note>
